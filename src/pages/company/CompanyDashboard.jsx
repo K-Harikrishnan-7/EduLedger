@@ -1,39 +1,50 @@
 import React, { useState } from 'react';
 import { useBlockchain } from '../../context/MockBlockchainContext';
-import { Search, ShieldCheck, CheckCircle, Clock, User, Award } from 'lucide-react';
+import { Search, ShieldCheck, CheckCircle, Clock, User, Award, FileText, ExternalLink } from 'lucide-react';
+
+import { calculateCGPA } from '../../utils/gradeCalculator';
 
 const CompanyDashboard = () => {
-    const { currentUser, students, users, requestConsent, getAccessibleMarksheets, getCompanyRequests } = useBlockchain();
+    const { currentUser, users, requestConsent, getAccessibleMarksheets, getCompanyRequests } = useBlockchain();
 
     const [studentIdInput, setStudentIdInput] = useState('');
     const [message, setMessage] = useState(null);
+    const [viewingPDF, setViewingPDF] = useState(null);
+    const [expandedStudent, setExpandedStudent] = useState(null);
 
     const accessibleMarksheets = getAccessibleMarksheets(currentUser.id);
     const myRequests = getCompanyRequests(currentUser.id);
 
-    // Fetch available students via context (or just users list) for validation mock
-    // In real app, you might just request by known ID or Address
     const allStudents = users.filter(u => u.role === 'student');
+
+    // Group marksheets by student
+    const marksheetsByStudent = {};
+    accessibleMarksheets.forEach(m => {
+        if (!marksheetsByStudent[m.studentId]) {
+            marksheetsByStudent[m.studentId] = {
+                student: allStudents.find(s => s.id === m.studentId),
+                marksheets: []
+            };
+        }
+        marksheetsByStudent[m.studentId].marksheets.push(m);
+    });
 
     const handleRequest = (e) => {
         e.preventDefault();
         if (!studentIdInput) return;
 
-        // Validate student exists
         const student = allStudents.find(s => s.id === studentIdInput || s.wallet === studentIdInput);
         if (!student) {
             setMessage({ type: 'error', text: 'Student ID or Wallet not found.' });
             return;
         }
 
-        // Check if already requested
         const existing = myRequests.find(r => r.studentId === student.id && r.status === 'pending');
         if (existing) {
             setMessage({ type: 'error', text: 'Request already pending for this student.' });
             return;
         }
 
-        // Check if already approved
         const approved = myRequests.find(r => r.studentId === student.id && r.status === 'approved');
         if (approved) {
             setMessage({ type: 'success', text: 'Access already granted!' });
@@ -44,6 +55,14 @@ const CompanyDashboard = () => {
         setMessage({ type: 'success', text: `Consent requested from ${student.name}` });
         setStudentIdInput('');
         setTimeout(() => setMessage(null), 3000);
+    };
+
+    const handleViewPDF = (pdfUrl) => {
+        if (pdfUrl) {
+            window.open(pdfUrl, '_blank');
+        } else {
+            alert('PDF not available');
+        }
     };
 
     return (
@@ -93,50 +112,10 @@ const CompanyDashboard = () => {
                                 {message.text}
                             </div>
                         )}
-
-
                     </form>
-                </div>
 
-                {/* Right Column: Verified List */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-
-                    {/* Approved & Verified Candidates */}
-                    <div style={cardStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                            <ShieldCheck size={24} style={{ color: 'var(--secondary-color)' }} />
-                            <h3 style={{ fontSize: '1.25rem' }}>Verified Marksheets</h3>
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                            {accessibleMarksheets.length === 0 ? (
-                                <p style={{ color: 'var(--text-muted)' }}>No verified marksheets accessible yet.</p>
-                            ) : (
-                                accessibleMarksheets.map((m, idx) => (
-                                    <div key={`${m.id}-${idx}`} style={verifiedItemStyle}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                            <div style={{ display: 'flex', gap: '0.75rem' }}>
-                                                <div style={{ backgroundColor: '#d1fae5', padding: '0.5rem', borderRadius: '50%', height: 'fit-content' }}>
-                                                    <CheckCircle size={16} color="var(--secondary-color)" />
-                                                </div>
-                                                <div>
-                                                    <div style={{ fontWeight: '600' }}>{m.studentName}</div>
-                                                    <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>{m.course}</div>
-                                                </div>
-                                            </div>
-                                            <div style={{ textAlign: 'right' }}>
-                                                <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--primary-color)' }}>{m.gpa}</div>
-                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>GPA</div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
-
-                    {/* Pending Requests List */}
-                    <div style={cardStyle}>
+                    {/* Pending Requests */}
+                    <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-color)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
                             <Clock size={20} style={{ color: '#d97706' }} />
                             <h3 style={{ fontSize: '1.125rem' }}>Pending Requests</h3>
@@ -155,9 +134,106 @@ const CompanyDashboard = () => {
                             })
                         )}
                     </div>
+                </div>
 
+                {/* Right Column: Verified Students */}
+                <div style={cardStyle}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                        <ShieldCheck size={24} style={{ color: 'var(--secondary-color)' }} />
+                        <h3 style={{ fontSize: '1.25rem' }}>Verified Students</h3>
+                    </div>
+
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        {Object.keys(marksheetsByStudent).length === 0 ? (
+                            <p style={{ color: 'var(--text-muted)' }}>No verified marksheets accessible yet.</p>
+                        ) : (
+                            Object.values(marksheetsByStudent).map(({ student, marksheets }) => {
+                                const isExpanded = expandedStudent === student.id;
+                                // Calculate CGPA from all courses in all marksheets
+                                const allCourses = marksheets.flatMap(m => m.courses || []);
+                                const cgpa = allCourses.length > 0 ? calculateCGPA(allCourses) : 0;
+
+                                return (
+                                    <div key={student.id} style={studentCardStyle}>
+                                        {/* Student Header */}
+                                        <div
+                                            style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                                            onClick={() => setExpandedStudent(isExpanded ? null : student.id)}
+                                        >
+                                            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                                                <div style={{ backgroundColor: '#d1fae5', padding: '0.5rem', borderRadius: '50%' }}>
+                                                    <User size={20} color="var(--secondary-color)" />
+                                                </div>
+                                                <div>
+                                                    <div style={{ fontWeight: '600', fontSize: '1rem' }}>{student.name}</div>
+                                                </div>
+                                            </div>
+                                            <div style={{ textAlign: 'right' }}>
+                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>CGPA</div>
+                                                <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--primary-color)' }}>{cgpa}</div>
+                                            </div>
+                                        </div>
+
+                                        {/* Expanded Marksheets */}
+                                        {isExpanded && (
+                                            <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
+                                                <div style={{ fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.75rem' }}>
+                                                    Academic Records
+                                                </div>
+                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                                    {marksheets.map(m => (
+                                                        <div key={m.id} style={marksheetItemStyle}>
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
+                                                                <div>
+                                                                    <div style={{ fontWeight: '500', fontSize: '0.875rem' }}>Academic Year {m.year}</div>
+                                                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.courses?.length || 0} courses</div>
+                                                                </div>
+                                                                <div style={{ textAlign: 'right' }}>
+                                                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
+                                                                        Year: {m.year}
+                                                                    </div>
+                                                                    <div style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>{m.cgpa}</div>
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Actions */}
+                                                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+                                                                <button
+                                                                    onClick={() => window.open(m.pdfUrl, '_blank')}
+                                                                    style={verifyIPFSButtonStyle}
+                                                                >
+                                                                    <FileText size={14} /> Verify
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                );
+                            })
+                        )}
+                    </div>
                 </div>
             </div>
+
+            {/* PDF Viewer Modal */}
+            {viewingPDF && (
+                <div style={modalOverlay} onClick={() => setViewingPDF(null)}>
+                    <div style={modalContent} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                            <h3>Official Marksheet</h3>
+                            <button onClick={() => setViewingPDF(null)} style={{ fontSize: '1.5rem', border: 'none', background: 'none', cursor: 'pointer' }}>×</button>
+                        </div>
+                        <iframe
+                            src={viewingPDF}
+                            style={{ width: '100%', height: '600px', border: 'none', borderRadius: 'var(--radius)' }}
+                            title="Marksheet PDF"
+                        />
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
@@ -199,14 +275,76 @@ const buttonStyle = {
     borderRadius: 'var(--radius)',
     border: 'none',
     marginTop: '0.5rem',
-    transition: 'background-color 0.2s'
+    transition: 'background-color 0.2s',
+    cursor: 'pointer'
 };
 
-const verifiedItemStyle = {
+const studentCardStyle = {
     padding: '1rem',
     borderRadius: '0.75rem',
     border: '1px solid var(--border-color)',
     backgroundColor: '#f9fafb'
+};
+
+const marksheetItemStyle = {
+    padding: '0.75rem',
+    backgroundColor: 'white',
+    borderRadius: 'var(--radius)',
+    border: '1px solid #e5e7eb'
+};
+
+const viewPDFButtonStyle = {
+    flex: 1,
+    padding: '0.5rem',
+    backgroundColor: 'var(--primary-color)',
+    color: 'white',
+    border: 'none',
+    borderRadius: 'var(--radius)',
+    fontSize: '0.75rem',
+    fontWeight: '500',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.25rem'
+};
+
+const verifyIPFSButtonStyle = {
+    flex: 1,
+    padding: '0.5rem',
+    backgroundColor: 'white',
+    color: 'var(--primary-color)',
+    border: '1px solid var(--primary-color)',
+    borderRadius: 'var(--radius)',
+    fontSize: '0.75rem',
+    fontWeight: '500',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '0.25rem'
+};
+
+const modalOverlay = {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000
+};
+
+const modalContent = {
+    backgroundColor: 'white',
+    padding: '1.5rem',
+    borderRadius: '1rem',
+    maxWidth: '90%',
+    width: '800px',
+    maxHeight: '90vh'
 };
 
 export default CompanyDashboard;

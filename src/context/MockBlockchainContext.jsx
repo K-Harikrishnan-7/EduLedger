@@ -7,38 +7,56 @@ export const useBlockchain = () => useContext(MockBlockchainContext);
 export const MockBlockchainProvider = ({ children }) => {
   // --- MOCK DATA ---
   const [users] = useState([
-    { id: 'u1', name: 'Stanford University', role: 'university', wallet: '0xUniversity', password: 'pass' },
-    { id: 'u2', name: 'MIT', role: 'university', wallet: '0xMIT', password: 'pass' },
-    { id: 's1', name: 'Harikrishnan', role: 'student', wallet: '0xStudent1', password: 'pass' },
-    { id: 's2', name: 'Harish', role: 'student', wallet: '0xStudent2', password: 'pass' },
+    // Universities with complete details
+    {
+      id: 'u1',
+      name: 'Rajalakshmi Engineering College',
+      address: 'Rajalakshmi Nagar, Thandalam, Tamil Nadu 602105',
+      role: 'university',
+      wallet: '0xUniversity',
+      password: 'pass'
+    },
+    {
+      id: 'u2',
+      name: 'MIT',
+      address: '77 Massachusetts Ave, Cambridge, MA 02139',
+      role: 'university',
+      wallet: '0xMIT',
+      password: 'pass'
+    },
+    // Students with complete profiles
+    {
+      id: 's1',
+      name: 'Harikrishnan',
+      rollNumber: 'STU2023001',
+      dob: '2005-05-15',
+      batchYear: '2022',
+      department: 'Computer Science and Engineering',
+      role: 'student',
+      wallet: '0xStudent1',
+      password: 'pass'
+    },
+    {
+      id: 's2',
+      name: 'Harish',
+      rollNumber: 'STU2023002',
+      dob: '2005-08-22',
+      batchYear: '2022',
+      department: 'Electronics and Communication Engineering',
+      role: 'student',
+      wallet: '0xStudent2',
+      password: 'pass'
+    },
+    // Companies
     { id: 'c1', name: 'Google', role: 'company', wallet: '0xGoogle', password: 'pass' },
     { id: 'c2', name: 'Microsoft', role: 'company', wallet: '0xMicrosoft', password: 'pass' },
   ]);
 
   const [currentUser, setCurrentUser] = useState(null); // Simulated login
 
-  const [marksheets, setMarksheets] = useState([
-    {
-      id: 'm1',
-      studentId: 's1',
-      universityId: 'u1',
-      course: 'Computer Science',
-      gpa: '3.8',
-      year: '2023',
-      issuedDate: '2023-05-20',
-      tokenHash: '0xabc123...',
-    }
-  ]);
+  const [marksheets, setMarksheets] = useState([]);
 
-  const [consentRequests, setConsentRequests] = useState([
-    {
-      id: 'r1',
-      companyId: 'c1',
-      studentId: 's1',
-      status: 'pending', // pending, approved, rejected
-      requestDate: '2023-10-01',
-    }
-  ]);
+  const [consentRequests, setConsentRequests] = useState([]);
 
   // --- ACTIONS ---
 
@@ -58,9 +76,14 @@ export const MockBlockchainProvider = ({ children }) => {
       id: `m${Date.now()}`,
       studentId,
       universityId: currentUser.id,
-      ...data,
+      year: data.year,
+      courses: data.courses || [],
+      cgpa: data.cgpa,
       issuedDate: new Date().toISOString().split('T')[0],
+      ipfsHash: data.ipfsHash || `Qm${Math.random().toString(36).slice(2)}`,
+      pdfUrl: data.pdfUrl || '',
       tokenHash: `0x${Math.random().toString(16).slice(2)}`,
+      digitalSignature: `Digitally verified by ${currentUser.name}`
     };
     setMarksheets(prev => [...prev, newMarksheet]);
     return newMarksheet;
