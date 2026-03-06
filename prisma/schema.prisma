@@ -1,0 +1,123 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id             String   @id @default(uuid())
+  username       String   @unique
+  password_hash  String
+  role           String   // university | student | company | admin
+  name           String?  // display name
+  email          String?
+  wallet_address String?
+  created_at     DateTime @default(now())
+
+  university     University?
+  student        Student?
+  company        Company?
+  reset_tokens   PasswordResetToken[]
+
+  @@map("users")
+}
+
+model University {
+  id                 String       @id @default(uuid())
+  user_id            String       @unique
+  name               String
+  address            String?
+  accreditation_code String?
+
+  user        User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  students    Student[]
+  departments Department[]
+
+  @@map("universities")
+}
+
+model Department {
+  id            String     @id @default(uuid())
+  name          String
+  university_id String
+  degree_id     String
+
+  university    University @relation(fields: [university_id], references: [id], onDelete: Cascade)
+  degree        Degree     @relation(fields: [degree_id], references: [id])
+  students      Student[]
+
+  @@unique([name, university_id, degree_id])
+  @@map("departments")
+}
+
+model Degree {
+  id          String       @id @default(uuid())
+  name        String       @unique  // B.E, B.Tech
+
+  departments Department[]
+
+  @@map("degrees")
+}
+
+model Student {
+  id            String   @id @default(uuid())
+  user_id       String   @unique
+  enrollment_no String   @unique
+  university_id String
+  department_id String?
+  dob           String?  // stored as YYYY-MM-DD string
+  wallet_address String? // Ethereum wallet where SBTs are minted
+
+  user          User        @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  university    University  @relation(fields: [university_id], references: [id])
+  department    Department? @relation(fields: [department_id], references: [id])
+  consent_logs  ConsentLog[] @relation("StudentConsents")
+
+  @@map("students")
+}
+
+model Company {
+  id             String  @id @default(uuid())
+  user_id        String  @unique
+  name           String
+  wallet_address String? // Ethereum wallet for on-chain consent signing
+
+  user         User         @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  consent_logs ConsentLog[] @relation("CompanyConsents")
+
+  @@map("companies")
+}
+
+model ConsentLog {
+  id         String    @id @default(uuid())
+  student_id String
+  company_id String
+  token_id   String?   // on-chain SBT token id (optional for now)
+  status     String    @default("pending")  // pending | approved | revoked
+  granted_at DateTime?
+  revoked_at DateTime?
+  created_at DateTime  @default(now())
+
+  student    Student  @relation("StudentConsents", fields: [student_id], references: [id])
+  company    Company  @relation("CompanyConsents", fields: [company_id], references: [id])
+
+  @@map("consent_logs")
+}
+
+model PasswordResetToken {
+  id         String   @id @default(uuid())
+  user_id    String
+  token      String   @unique
+  expires_at DateTime
+  used       Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("password_reset_tokens")
+}

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useBlockchain } from '../context/MockBlockchainContext';
+import { useBlockchain } from '../context/AppContext';
 import { GraduationCap, Building2, Briefcase } from 'lucide-react';
 
 const Home = () => {

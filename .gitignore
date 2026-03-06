@@ -22,3 +22,14 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+/src/generated/prisma
+
+# Environment variables
+.env
+.env.*
+
+# Hardhat
+cache/
+artifacts/
+.hardhat-state.json

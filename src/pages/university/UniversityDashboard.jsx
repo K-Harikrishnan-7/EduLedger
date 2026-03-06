@@ -1,408 +1,469 @@
-import React, { useState } from 'react';
-import { useBlockchain } from '../../context/MockBlockchainContext';
-import { Upload, FileText, CheckCircle, User, Plus, Trash2, Eye } from 'lucide-react';
-import { generateMarksheetPDF, downloadPDF } from '../../utils/pdfGenerator';
-import { calculateCGPA, getAvailableGrades } from '../../utils/gradeCalculator';
+import React, { useState, useRef, useEffect } from 'react';
+import { useBlockchain } from '../../context/AppContext';
+import { useWeb3 } from '../../context/Web3Context';
+import { Upload, FileText, User, Wallet, CheckCircle, X } from 'lucide-react';
+import { uploadFileToIPFS, uploadJSONToIPFS } from '../../services/ipfsService';
+import { generateCredentialMetadata } from '../../utils/metadataGenerator';
 
 const UniversityDashboard = () => {
-    const { currentUser, getStudentsList, issueMarksheet, marksheets, users } = useBlockchain();
-    const students = getStudentsList();
+    const { currentUser, getStudentsList, issueMarksheet, marksheets } = useBlockchain();
+    const { isConnected, contracts, connectWallet, isConnecting, shortAccount, account, error, chainId, isWalletMatch } = useWeb3();
+    const fileInputRef = useRef(null);
 
-    // Form state
-    const [formData, setFormData] = useState({
-        studentId: '',
-        year: new Date().getFullYear().toString(),
-        courses: [{ courseCode: '', courseName: '', semester: '', credits: '', grade: '' }],
-        cgpa: ''
-    });
+    // Cascading selectors
+    const [degrees, setDegrees] = useState([]);
+    const [selectedDegree, setSelectedDegree] = useState('');
+    const [departments, setDepartments] = useState([]);
+    const [selectedDept, setSelectedDept] = useState('');
+    const [students, setStudents] = useState([]);
 
+    const [studentId, setStudentId] = useState('');
+    const [year, setYear] = useState(new Date().getFullYear().toString());
+    const [description, setDescription] = useState('');
+    const [selectedFile, setSelectedFile] = useState(null);
+    const [filePreviewUrl, setFilePreviewUrl] = useState(null);
     const [message, setMessage] = useState(null);
     const [loading, setLoading] = useState(false);
-    const [pdfPreview, setPdfPreview] = useState(null);
+    const [loadingStep, setLoadingStep] = useState('');
 
-    const issuedMarksheets = marksheets.filter(m => m.universityId === currentUser.id);
-    const grades = getAvailableGrades();
+    const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    const token = () => localStorage.getItem('eduleger_token');
 
-    // Add new course row
-    const addCourse = () => {
-        setFormData({
-            ...formData,
-            courses: [...formData.courses, { courseCode: '', courseName: '', semester: '', credits: '', grade: '' }]
-        });
-    };
+    // Load degrees on mount
+    useEffect(() => {
+        fetch(`${API_BASE}/university/degrees`)
+            .then(r => r.json())
+            .then(data => setDegrees(Array.isArray(data) ? data : []))
+            .catch(() => setDegrees([]));
+    }, []);
 
-    // Remove course row
-    const removeCourse = (index) => {
-        if (formData.courses.length === 1) {
-            setMessage({ type: 'error', text: 'At least one course is required!' });
-            setTimeout(() => setMessage(null), 2000);
-            return;
-        }
-        const newCourses = formData.courses.filter((_, i) => i !== index);
-        setFormData({ ...formData, courses: newCourses });
-        updateCGPA(newCourses);
-    };
+    useEffect(() => {
+        console.log("Department Effect Triggered", { selectedDegree, universityId: currentUser?.universityId });
+        if (!selectedDegree || !currentUser?.universityId) return;
+        setSelectedDept('');
+        setStudentId('');
 
-    // Update course data
-    const updateCourse = (index, field, value) => {
-        const newCourses = [...formData.courses];
-        newCourses[index][field] = value;
-        setFormData({ ...formData, courses: newCourses });
+        const deg = degrees.find(d => d.name === selectedDegree);
+        const query = deg ? `&degree_id=${deg.id}` : '';
+        const url = `${API_BASE}/university/departments?university_id=${currentUser.universityId}${query}`;
 
-        // Auto-calculate CGPA when grade or credits change
-        if (field === 'grade' || field === 'credits') {
-            updateCGPA(newCourses);
-        }
-    };
+        console.log("Fetching departments from:", url);
 
-    // Update CGPA based on courses
-    const updateCGPA = (courses) => {
-        const validCourses = courses.filter(c => c.grade && c.credits);
-        if (validCourses.length > 0) {
-            const cgpa = calculateCGPA(validCourses);
-            setFormData(prev => ({ ...prev, cgpa: cgpa.toString() }));
-        }
-    };
-
-    // Preview PDF before submission
-    const handlePreview = async () => {
-        if (!validateForm()) return;
-
-        const student = students.find(s => s.id === formData.studentId);
-        if (!student) {
-            setMessage({ type: 'error', text: 'Student not found!' });
-            return;
-        }
-
-        try {
-            setLoading(true);
-            const pdfBlob = await generateMarksheetPDF({
-                university: {
-                    name: currentUser.name,
-                    address: currentUser.address || 'University Address'
-                },
-                student: {
-                    name: student.name,
-                    rollNumber: student.rollNumber || 'N/A',
-                    dob: student.dob || 'N/A',
-                    department: student.department || 'N/A'
-                },
-                year: formData.year,
-                courses: formData.courses,
-                cgpa: formData.cgpa,
-                issuedDate: new Date().toISOString().split('T')[0],
-                verificationNote: `Digitally verified by ${currentUser.name}`
+        fetch(url)
+            .then(r => r.json())
+            .then(data => {
+                console.log("Departments Response:", data);
+                setDepartments(Array.isArray(data) ? data : []);
+            })
+            .catch(err => {
+                console.error("Departments Fetch Error:", err);
+                setDepartments([]);
             });
+    }, [selectedDegree, degrees, currentUser, API_BASE]);
 
-            const pdfUrl = URL.createObjectURL(pdfBlob);
-            setPdfPreview({ url: pdfUrl, blob: pdfBlob });
-            setLoading(false);
-        } catch (error) {
-            setLoading(false);
-            setMessage({ type: 'error', text: 'PDF generation failed!' });
+    // Load students when department is selected
+    useEffect(() => {
+        if (!selectedDept) return;
+        setStudentId('');
+
+        const dept = departments.find(d => d.name === selectedDept);
+        if (dept) {
+            getStudentsList(dept.id).then(setStudents).catch(() => setStudents([]));
+        } else {
+            setStudents([]);
         }
+    }, [selectedDept, departments, getStudentsList]);
+
+    // Use universityId (not generic user id) for filtering
+    const issuedMarksheets = marksheets.filter(m => m.universityId === currentUser?.universityId);
+
+    const handleFileChange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        if (file.type !== 'application/pdf') {
+            setMessage({ type: 'error', text: 'Only PDF files are accepted.' });
+            return;
+        }
+        if (file.size > 10 * 1024 * 1024) {
+            setMessage({ type: 'error', text: 'File size must be under 10 MB.' });
+            return;
+        }
+        setSelectedFile(file);
+        setFilePreviewUrl(URL.createObjectURL(file));
+        setMessage(null);
     };
 
-    // Validate form
-    const validateForm = () => {
-        if (!formData.studentId || !formData.year) {
-            setMessage({ type: 'error', text: 'Please fill all required fields!' });
-            setTimeout(() => setMessage(null), 3000);
-            return false;
-        }
-
-        const incompleteCourses = formData.courses.filter(
-            c => !c.courseCode || !c.courseName || !c.semester || !c.credits || !c.grade
-        );
-
-        if (incompleteCourses.length > 0) {
-            setMessage({ type: 'error', text: 'Please complete all course details!' });
-            setTimeout(() => setMessage(null), 3000);
-            return false;
-        }
-
-        return true;
+    const handleDrop = (e) => {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (file) handleFileChange({ target: { files: [file] } });
     };
 
-    // Submit form
+    const clearFile = () => {
+        setSelectedFile(null);
+        setFilePreviewUrl(null);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
-        if (!validateForm()) return;
+        if (!studentId) { setMessage({ type: 'error', text: 'Please select a student.' }); return; }
+        if (!selectedFile) { setMessage({ type: 'error', text: 'Please upload a marksheet PDF.' }); return; }
+
+        const student = students.find(s => s.id === studentId);
+        if (!student) { setMessage({ type: 'error', text: 'Selected student not found.' }); return; }
+
+        setLoading(true);
 
         try {
-            setLoading(true);
-            setMessage({ type: 'info', text: 'Generating PDF...' });
+            let pdfUrl = URL.createObjectURL(selectedFile);
+            let ipfsHash = `local_${Date.now()}`;
+            let metadataUri = null;
+            let tokenId = null;
+            let ipfsUsed = false;
 
-            const student = students.find(s => s.id === formData.studentId);
+            // ── Step 1: Try IPFS upload (Pinata) — optional ───────────────────
+            if (import.meta.env.VITE_PINATA_JWT) {
+                setLoadingStep('📤 Uploading PDF to IPFS...');
+                try {
+                    const pdfResult = await uploadFileToIPFS(
+                        selectedFile,
+                        `marksheet_${student.rollNumber || student.id}_${year}.pdf`
+                    );
+                    if (pdfResult.success) {
+                        ipfsHash = pdfResult.ipfsHash;
+                        pdfUrl = pdfResult.gatewayUrl;
 
-            // Generate PDF
-            const pdfBlob = pdfPreview?.blob || await generateMarksheetPDF({
-                university: {
-                    name: currentUser.name,
-                    address: currentUser.address || 'University Address'
-                },
-                student: {
-                    name: student.name,
-                    rollNumber: student.rollNumber || 'N/A',
-                    dob: student.dob || 'N/A',
-                    department: student.department || 'N/A'
-                },
-                year: formData.year,
-                courses: formData.courses,
-                cgpa: formData.cgpa,
-                issuedDate: new Date().toISOString().split('T')[0],
-                verificationNote: `Digitally verified by ${currentUser.name}`
+                        setLoadingStep('📋 Uploading metadata to IPFS...');
+                        const metadata = generateCredentialMetadata(
+                            { name: student.name, rollNumber: student.rollNumber || student.id, department: selectedDept, degree: selectedDegree },
+                            { year, description },
+                            ipfsHash
+                        );
+                        const metaResult = await uploadJSONToIPFS(metadata, `meta_${student.id}_${year}`);
+                        if (metaResult.success) {
+                            metadataUri = metaResult.ipfsUrl;
+                            ipfsUsed = true;
+                        }
+                    }
+                } catch (ipfsErr) {
+                    console.warn('IPFS upload failed, falling back to embedded metadata:', ipfsErr.message);
+                }
+            }
+
+            // ── Step 2: Build embedded metadata if IPFS wasn't used ──────────
+            if (!metadataUri) {
+                const metadata = generateCredentialMetadata(
+                    { name: student.name, rollNumber: student.rollNumber || student.id, department: selectedDept, degree: selectedDegree },
+                    { year, description },
+                    ipfsHash
+                );
+                // Encode as data URI so it's always readable on-chain
+                const jsonStr = JSON.stringify(metadata);
+                const b64 = btoa(unescape(encodeURIComponent(jsonStr)));
+                metadataUri = `data:application/json;base64,${b64}`;
+            }
+
+            // ── Step 3: Mint SBT ──────────────────────────────────────────────
+            if (isConnected && contracts?.credential && student.wallet) {
+                setLoadingStep('⛓️ Minting Soulbound Token on Hardhat...');
+                try {
+                    const tx = await contracts.credential.mintCredential(student.wallet, metadataUri);
+                    setLoadingStep('⏳ Waiting for block confirmation...');
+                    const receipt = await tx.wait();
+                    const event = receipt.logs?.find(l => l.fragment?.name === 'CredentialIssued');
+                    tokenId = event ? event.args?.tokenId?.toString() : 'minted';
+                    console.log('✅ SBT minted! Token:', tokenId, '| To:', student.wallet);
+                } catch (txErr) {
+                    console.error('SBT mint failed:', txErr.message);
+                    setMessage({ type: 'error', text: `Mint failed: ${txErr.message.slice(0, 120)}` });
+                    setLoading(false);
+                    setLoadingStep('');
+                    return;
+                }
+            } else if (!isConnected) {
+                setMessage({ type: 'error', text: 'Please connect MetaMask to mint an SBT.' });
+                setLoading(false);
+                setLoadingStep('');
+                return;
+            } else if (!student.wallet) {
+                setMessage({ type: 'error', text: `Student "${student.name}" has no registered wallet address. Please update it in the database.` });
+                setLoading(false);
+                setLoadingStep('');
+                return;
+            }
+
+            // Save record locally
+            issueMarksheet(studentId, {
+                year, description,
+                fileName: selectedFile.name,
+                pdfUrl, ipfsHash,
+                tokenId,
+                mintedOnChain: !!tokenId,
             });
 
-            // Create blob URL for PDF
-            const pdfUrl = URL.createObjectURL(pdfBlob);
-
-            // Issue marksheet with PDF URL
-            const marksheet = issueMarksheet(formData.studentId, {
-                year: formData.year,
-                courses: formData.courses,
-                cgpa: formData.cgpa,
-                pdfUrl: pdfUrl,
-                ipfsHash: `hash_${Date.now()}` // Mock hash for compatibility
+            setMessage({
+                type: 'success',
+                text: tokenId
+                    ? `✅ SBT minted! Token #${tokenId} → ${student.name}'s wallet${ipfsUsed ? ' | Metadata on IPFS' : ' | Metadata embedded'}`
+                    : '✅ Marksheet uploaded!'
             });
 
-            setMessage({ type: 'success', text: 'Marksheet issued successfully!' });
-
-            // Reset form
-            setFormData({
-                studentId: '',
-                year: new Date().getFullYear().toString(),
-                courses: [{ courseCode: '', courseName: '', semester: '', credits: '', grade: '' }],
-                cgpa: ''
-            });
-            setPdfPreview(null);
+            setSelectedDegree('');
+            setSelectedDept('');
+            setStudentId('');
+            setYear(new Date().getFullYear().toString());
+            setDescription('');
+            clearFile();
+            setTimeout(() => setMessage(null), 8000);
+        } catch (err) {
+            console.error(err);
+            setMessage({ type: 'error', text: `Upload failed: ${err.message}` });
+        } finally {
             setLoading(false);
-
-            setTimeout(() => setMessage(null), 5000);
-        } catch (error) {
-            setLoading(false);
-            console.error('Marksheet submission error:', error);
-            setMessage({ type: 'error', text: `Failed to issue marksheet! Error: ${error.message}` });
+            setLoadingStep('');
         }
     };
 
     return (
         <div>
+            {/* Header */}
             <div style={{ marginBottom: '2rem' }}>
                 <h2 style={{ fontSize: '1.875rem', marginBottom: '0.5rem' }}>University Dashboard</h2>
-                <p style={{ color: 'var(--text-muted)' }}>Welcome, {currentUser.name}. Issue verified credentials to students.</p>
+                <p style={{ color: 'var(--text-muted)' }}>Welcome, {currentUser.name}. Upload verified marksheets to students.</p>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: pdfPreview ? '1fr 1fr' : '1fr', gap: '2rem' }}>
-                {/* Left Column: Issue Form */}
+            {/* Wallet Banner */}
+            {(() => {
+                const registeredWallet = currentUser?.wallet_address;
+                const walletOk = isConnected && isWalletMatch(registeredWallet);
+                const wrongWallet = isConnected && !isWalletMatch(registeredWallet);
+                const shortExpected = registeredWallet ? `${registeredWallet.slice(0, 6)}...${registeredWallet.slice(-4)}` : null;
+                return (
+                    <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                        padding: '0.75rem 1rem', borderRadius: 'var(--radius)', marginBottom: '1.5rem',
+                        backgroundColor: walletOk ? '#d1fae5' : wrongWallet ? '#fef2f2' : '#fef3c7',
+                        border: `1px solid ${walletOk ? '#6ee7b7' : wrongWallet ? '#fecaca' : '#fcd34d'}`
+                    }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
+                            <Wallet size={16} />
+                            {walletOk && <><strong>Wallet:</strong> {shortAccount} &nbsp;|&nbsp; SBT minting <strong style={{ color: '#059669' }}>ENABLED ⛓</strong></>}
+                            {wrongWallet && <><strong style={{ color: '#b91c1c' }}>⚠ Wrong account!</strong>&nbsp; Switch MetaMask to <code style={{ backgroundColor: '#fee2e2', padding: '0.1rem 0.3rem', borderRadius: 3 }}>{shortExpected}</code> (Account 1 in Hardhat)</>}
+                            {!isConnected && <>Connect MetaMask to enable on-chain SBT minting</>}
+                        </div>
+                        {error && <span style={{ fontSize: '0.8rem', color: '#b91c1c' }}>⚠️ {error}</span>}
+                        {isConnected && chainId && chainId !== '31337' && chainId !== 31337 && (
+                            <span style={{ fontSize: '0.8rem', color: '#92400e' }}>⚠️ Switch to Hardhat Local (31337)</span>
+                        )}
+                        {!isConnected && (
+                            <button onClick={connectWallet} disabled={isConnecting} style={walletBtnStyle}>
+                                {isConnecting ? 'Connecting...' : 'Connect Wallet'}
+                            </button>
+                        )}
+                    </div>
+                );
+            })()}
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '2rem' }}>
+                {/* Upload Form */}
                 <div style={cardStyle}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                        <Upload className="text-primary-600" size={24} style={{ color: 'var(--primary-color)' }} />
-                        <h3 style={{ fontSize: '1.25rem' }}>Issue New Marksheet</h3>
+                        <Upload size={24} style={{ color: 'var(--primary-color)' }} />
+                        <h3 style={{ fontSize: '1.25rem' }}>Upload Marksheet</h3>
                     </div>
 
-                    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        {/* Student Selection */}
+                    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                        {/* Step 1: Degree */}
+                        <div>
+                            <label style={labelStyle}>Degree *</label>
+                            <select
+                                style={inputStyle}
+                                value={selectedDegree}
+                                onChange={e => setSelectedDegree(e.target.value)}
+                                required
+                            >
+                                <option value="">-- Select Degree --</option>
+                                {degrees.map(d => (
+                                    <option key={d.id} value={d.name}>{d.name}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {/* Step 2: Department (enabled after degree) */}
+                        <div>
+                            <label style={labelStyle}>Department *</label>
+                            <select
+                                style={{ ...inputStyle, opacity: selectedDegree ? 1 : 0.5 }}
+                                value={selectedDept}
+                                onChange={e => setSelectedDept(e.target.value)}
+                                disabled={!selectedDegree}
+                                required
+                            >
+                                <option value="">-- Select Department --</option>
+                                {departments.map(d => (
+                                    <option key={d.id} value={d.name}>{d.name}</option>
+                                ))}
+                            </select>
+                            {!selectedDegree && (
+                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>Select a degree first</p>
+                            )}
+                        </div>
+
+                        {/* Step 3: Student (enabled after department) */}
                         <div>
                             <label style={labelStyle}>Select Student *</label>
                             <select
-                                style={inputStyle}
-                                value={formData.studentId}
-                                onChange={e => setFormData({ ...formData, studentId: e.target.value })}
+                                style={{ ...inputStyle, opacity: selectedDept ? 1 : 0.5 }}
+                                value={studentId}
+                                onChange={e => setStudentId(e.target.value)}
+                                disabled={!selectedDept}
                                 required
                             >
                                 <option value="">-- Choose Student --</option>
                                 {students.map(s => (
                                     <option key={s.id} value={s.id}>
-                                        {s.name} - {s.rollNumber || s.wallet}
+                                        {s.name} ({s.rollNumber || s.id})
                                     </option>
                                 ))}
                             </select>
+                            {!selectedDept && (
+                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>Select a department first</p>
+                            )}
                         </div>
 
-
-
-                        {/* Year */}
+                        {/* Academic Year */}
                         <div>
                             <label style={labelStyle}>Academic Year *</label>
                             <input
                                 type="number"
                                 style={inputStyle}
-                                value={formData.year}
-                                onChange={e => setFormData({ ...formData, year: e.target.value })}
+                                value={year}
+                                onChange={e => setYear(e.target.value)}
+                                min="2000" max="2100"
                                 required
                             />
                         </div>
 
-                        {/* Courses */}
+                        {/* Description (optional) */}
                         <div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                <label style={labelStyle}>Courses *</label>
-                                <button type="button" onClick={addCourse} style={addButtonStyle}>
-                                    <Plus size={16} /> Add Course
-                                </button>
-                            </div>
+                            <label style={labelStyle}>Description <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(optional)</span></label>
+                            <input
+                                type="text"
+                                style={inputStyle}
+                                placeholder="e.g. Final Year Consolidated Marksheet"
+                                value={description}
+                                onChange={e => setDescription(e.target.value)}
+                            />
+                        </div>
 
-                            {formData.courses.map((course, index) => (
-                                <div key={index} style={{
-                                    display: 'grid',
-                                    gridTemplateColumns: '1fr 2fr 0.5fr 0.5fr 0.5fr auto',
-                                    gap: '0.5rem',
-                                    marginBottom: '0.75rem',
-                                    alignItems: 'end'
-                                }}>
-                                    <input
-                                        type="text"
-                                        style={inputStyle}
-                                        placeholder="Code"
-                                        value={course.courseCode}
-                                        onChange={e => updateCourse(index, 'courseCode', e.target.value)}
-                                        required
-                                    />
-                                    <input
-                                        type="text"
-                                        style={inputStyle}
-                                        placeholder="Course Name"
-                                        value={course.courseName}
-                                        onChange={e => updateCourse(index, 'courseName', e.target.value)}
-                                        required
-                                    />
-                                    <input
-                                        type="number"
-                                        style={inputStyle}
-                                        placeholder="Sem"
-                                        min="1"
-                                        max="8"
-                                        value={course.semester}
-                                        onChange={e => updateCourse(index, 'semester', e.target.value)}
-                                        required
-                                    />
-                                    <input
-                                        type="number"
-                                        style={inputStyle}
-                                        placeholder="Credits"
-                                        min="1"
-                                        max="6"
-                                        value={course.credits}
-                                        onChange={e => updateCourse(index, 'credits', e.target.value)}
-                                        required
-                                    />
-                                    <select
-                                        style={inputStyle}
-                                        value={course.grade}
-                                        onChange={e => updateCourse(index, 'grade', e.target.value)}
-                                        required
-                                    >
-                                        <option value="">Grade</option>
-                                        {grades.map(g => (
-                                            <option key={g} value={g}>{g}</option>
-                                        ))}
-                                    </select>
-                                    <button
-                                        type="button"
-                                        onClick={() => removeCourse(index)}
-                                        style={removeButtonStyle}
-                                        disabled={formData.courses.length === 1}
-                                    >
-                                        <Trash2 size={16} />
+                        {/* PDF Upload Drop Zone */}
+                        <div>
+                            <label style={labelStyle}>Marksheet PDF *</label>
+                            {selectedFile ? (
+                                <div style={fileSelectedStyle}>
+                                    <FileText size={20} style={{ color: 'var(--primary-color)', flexShrink: 0 }} />
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ fontWeight: 500, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {selectedFile.name}
+                                        </div>
+                                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                            {(selectedFile.size / 1024).toFixed(1)} KB
+                                        </div>
+                                    </div>
+                                    <button type="button" onClick={clearFile} style={clearBtnStyle}>
+                                        <X size={16} />
                                     </button>
                                 </div>
-                            ))}
+                            ) : (
+                                <div
+                                    style={dropZoneStyle}
+                                    onClick={() => fileInputRef.current?.click()}
+                                    onDrop={handleDrop}
+                                    onDragOver={e => e.preventDefault()}
+                                >
+                                    <Upload size={32} style={{ color: 'var(--text-muted)', marginBottom: '0.5rem' }} />
+                                    <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', margin: 0 }}>
+                                        <strong style={{ color: 'var(--primary-color)' }}>Click to upload</strong> or drag & drop
+                                    </p>
+                                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '0.25rem 0 0' }}>PDF only, max 10 MB</p>
+                                    <input ref={fileInputRef} type="file" accept=".pdf" style={{ display: 'none' }} onChange={handleFileChange} />
+                                </div>
+                            )}
                         </div>
 
-                        {/* CGPA Display */}
-                        <div style={{ backgroundColor: '#f0f9ff', padding: '0.75rem', borderRadius: 'var(--radius)', border: '1px solid #bae6fd' }}>
-                            <label style={{ ...labelStyle, marginBottom: '0.25rem' }}>Calculated CGPA</label>
-                            <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--primary-color)' }}>
-                                {formData.cgpa || '--'}
+                        {/* Status / Progress */}
+                        {loading && loadingStep && (
+                            <div style={{ padding: '0.75rem', borderRadius: 'var(--radius)', backgroundColor: '#eff6ff', color: '#1e40af', fontSize: '0.875rem' }}>
+                                {loadingStep}
                             </div>
-                        </div>
-
-                        {/* Action Buttons */}
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.5rem' }}>
-                            <button type="button" onClick={handlePreview} style={previewButtonStyle} disabled={loading}>
-                                <Eye size={16} /> Preview PDF
-                            </button>
-                            <button type="submit" style={buttonStyle} disabled={loading}>
-                                {loading ? 'Processing...' : 'Issue Credential'}
-                            </button>
-                        </div>
+                        )}
 
                         {message && (
                             <div style={{
-                                padding: '0.75rem',
-                                borderRadius: 'var(--radius)',
-                                backgroundColor: message.type === 'success' ? '#ecfdf5' : message.type === 'error' ? '#fef2f2' : '#eff6ff',
-                                color: message.type === 'success' ? '#047857' : message.type === 'error' ? '#b91c1c' : '#1e40af',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.5rem'
+                                padding: '0.75rem', borderRadius: 'var(--radius)',
+                                backgroundColor: message.type === 'success' ? '#ecfdf5' : '#fef2f2',
+                                color: message.type === 'success' ? '#047857' : '#b91c1c',
+                                display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem'
                             }}>
                                 {message.type === 'success' && <CheckCircle size={16} />}
                                 {message.text}
                             </div>
                         )}
+
+                        <button type="submit" style={buttonStyle} disabled={loading || !selectedFile}>
+                            {loading ? 'Uploading...' : 'Upload & Issue Credential'}
+                        </button>
                     </form>
                 </div>
 
-                {/* PDF Preview Column */}
-                {pdfPreview && (
-                    <div style={cardStyle}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                            <h3 style={{ fontSize: '1.25rem' }}>PDF Preview</h3>
-                            <button
-                                onClick={() => downloadPDF(pdfPreview.blob, `marksheet_${formData.year}.pdf`)}
-                                style={{ ...previewButtonStyle, padding: '0.5rem 1rem' }}
-                            >
-                                Download
-                            </button>
-                        </div>
-                        <iframe
-                            src={pdfPreview.url}
-                            style={{ width: '100%', height: '600px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius)' }}
-                            title="PDF Preview"
-                        />
+                {/* PDF Preview Removed */}
+
+                {/* Recently Issued (always shown) */}
+                <div style={cardStyle}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                        <FileText size={24} style={{ color: 'var(--primary-color)' }} />
+                        <h3 style={{ fontSize: '1.25rem' }}>Recently Issued</h3>
                     </div>
-                )}
 
-                {/* Recently Issued (full width when no preview) */}
-                {!pdfPreview && (
-                    <div style={cardStyle}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
-                            <FileText size={24} style={{ color: 'var(--primary-color)' }} />
-                            <h3 style={{ fontSize: '1.25rem' }}>Recently Issued</h3>
-                        </div>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                            {issuedMarksheets.length === 0 ? (
-                                <p style={{ color: 'var(--text-muted)' }}>No marksheets issued yet.</p>
-                            ) : (
-                                issuedMarksheets.slice().reverse().map(m => {
-                                    const student = students.find(s => s.id === m.studentId);
-                                    return (
-                                        <div key={m.id} style={itemStyle}>
-                                            <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: '#e0e7ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary-color)' }}>
-                                                <User size={20} />
-                                            </div>
-                                            <div style={{ flex: 1 }}>
-                                                <div style={{ fontWeight: '500' }}>{student?.name || 'Unknown Student'}</div>
-                                                <div style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                                                    {m.courses?.length || 0} courses
-                                                </div>
-                                            </div>
-                                            <div style={{ textAlign: 'right' }}>
-                                                <div style={{ fontWeight: 'bold' }}>CGPA: {m.cgpa}</div>
-                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Year: {m.year}</div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                        {issuedMarksheets.length === 0 ? (
+                            <p style={{ color: 'var(--text-muted)' }}>No marksheets issued yet.</p>
+                        ) : (
+                            issuedMarksheets.slice().reverse().map(m => {
+                                const student = students.find(s => s.id === m.studentId);
+                                return (
+                                    <div key={m.id} style={itemStyle}>
+                                        <div style={{ width: 40, height: 40, borderRadius: '50%', backgroundColor: '#e0e7ff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                            <User size={20} style={{ color: 'var(--primary-color)' }} />
+                                        </div>
+                                        <div style={{ flex: 1 }}>
+                                            <div style={{ fontWeight: 500 }}>{student?.name || 'Unknown'}</div>
+                                            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                                                {m.description || 'Marksheet'} • Year {m.year}
                                             </div>
                                         </div>
-                                    );
-                                })
-                            )}
-                        </div>
+                                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
+                                            {m.mintedOnChain && (
+                                                <span style={{ fontSize: '0.7rem', color: '#6366f1', backgroundColor: '#ede9fe', padding: '0.1rem 0.4rem', borderRadius: 4 }}>
+                                                    ⛓ SBT #{m.tokenId}
+                                                </span>
+                                            )}
+                                            <button
+                                                onClick={() => window.open(m.pdfUrl, '_blank')}
+                                                style={{ fontSize: '0.75rem', color: 'var(--primary-color)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                            >
+                                                View PDF
+                                            </button>
+                                        </div>
+                                    </div>
+                                );
+                            })
+                        )}
                     </div>
-                )}
+                </div>
             </div>
-        </div>
+        </div >
     );
 };
 
@@ -430,7 +491,38 @@ const inputStyle = {
     border: '1px solid var(--border-color)',
     fontSize: '0.875rem',
     outline: 'none',
-    transition: 'border-color 0.2s'
+    boxSizing: 'border-box'
+};
+
+const dropZoneStyle = {
+    border: '2px dashed var(--border-color)',
+    borderRadius: 'var(--radius)',
+    padding: '2rem',
+    textAlign: 'center',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    transition: 'border-color 0.2s',
+};
+
+const fileSelectedStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.75rem',
+    padding: '0.75rem 1rem',
+    border: '1px solid #a5b4fc',
+    borderRadius: 'var(--radius)',
+    backgroundColor: '#f5f3ff',
+};
+
+const clearBtnStyle = {
+    background: 'none',
+    border: 'none',
+    cursor: 'pointer',
+    color: 'var(--text-muted)',
+    display: 'flex',
+    padding: '0.25rem',
 };
 
 const buttonStyle = {
@@ -441,45 +533,12 @@ const buttonStyle = {
     fontWeight: '600',
     borderRadius: 'var(--radius)',
     border: 'none',
-    transition: 'background-color 0.2s',
     cursor: 'pointer',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '0.5rem'
-};
-
-const previewButtonStyle = {
-    ...buttonStyle,
-    backgroundColor: 'white',
-    color: 'var(--primary-color)',
-    border: '1px solid var(--primary-color)'
-};
-
-const addButtonStyle = {
-    padding: '0.5rem 0.75rem',
-    backgroundColor: 'var(--secondary-color)',
-    color: 'white',
-    fontWeight: '500',
-    fontSize: '0.875rem',
-    borderRadius: 'var(--radius)',
-    border: 'none',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.25rem'
-};
-
-const removeButtonStyle = {
-    padding: '0.625rem',
-    backgroundColor: '#fee2e2',
-    color: '#b91c1c',
-    border: 'none',
-    borderRadius: 'var(--radius)',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center'
+    gap: '0.5rem',
+    fontSize: '1rem',
 };
 
 const itemStyle = {
@@ -489,6 +548,17 @@ const itemStyle = {
     padding: '0.75rem',
     borderRadius: 'var(--radius)',
     border: '1px solid var(--border-color)',
+};
+
+const walletBtnStyle = {
+    padding: '0.5rem 1rem',
+    backgroundColor: 'var(--primary-color)',
+    color: 'white',
+    border: 'none',
+    borderRadius: 'var(--radius)',
+    fontSize: '0.875rem',
+    fontWeight: '600',
+    cursor: 'pointer',
 };
 
 export default UniversityDashboard;

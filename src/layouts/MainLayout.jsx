@@ -1,6 +1,6 @@
 import React from 'react';
 import { Outlet, Link, useNavigate, useLocation } from 'react-router-dom';
-import { useBlockchain } from '../context/MockBlockchainContext';
+import { useBlockchain } from '../context/AppContext';
 import { GraduationCap, Briefcase, Building2, LogOut } from 'lucide-react';
 
 const MainLayout = () => {
@@ -35,7 +35,7 @@ const MainLayout = () => {
                     <h1 style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>EduLedger</h1>
                 </div>
 
-                {currentUser && (
+                {currentUser && !isLanding && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <div style={{ textAlign: 'right' }}>
                             <div style={{ fontWeight: '500' }}>{currentUser.name}</div>

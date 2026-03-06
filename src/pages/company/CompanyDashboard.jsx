@@ -1,67 +1,199 @@
-import React, { useState } from 'react';
-import { useBlockchain } from '../../context/MockBlockchainContext';
-import { Search, ShieldCheck, CheckCircle, Clock, User, Award, FileText, ExternalLink } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { useBlockchain } from '../../context/AppContext';
+import { useWeb3 } from '../../context/Web3Context';
+import { Search, ShieldCheck, Clock, User, FileText, Wallet, AlertTriangle, CheckCircle, Award } from 'lucide-react';
+import ConsentManagerArtifact from '../../contracts/artifacts/contracts/ConsentManager.sol/ConsentManager.json';
+import contractAddresses from '../../contracts/addresses.json';
+import { Contract, JsonRpcProvider } from 'ethers';
+import { resolveIPFSUrl } from '../../services/ipfsService';
+import AcademicCredentialSBTArtifact from '../../contracts/artifacts/contracts/AcademicCredentialSBT.sol/AcademicCredentialSBT.json';
+import CredentialNFTModal from '../../components/CredentialNFTModal';
 
-import { calculateCGPA } from '../../utils/gradeCalculator';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const HARDHAT_RPC = 'http://127.0.0.1:8545';
 
 const CompanyDashboard = () => {
-    const { currentUser, users, requestConsent, getAccessibleMarksheets, getCompanyRequests } = useBlockchain();
+    const { currentUser, authHeaders } = useBlockchain();
+    const { isConnected, connectWallet, isConnecting, shortAccount, account, error, chainId, isWalletMatch, contracts } = useWeb3();
 
-    const [studentIdInput, setStudentIdInput] = useState('');
+    const [enrollmentInput, setEnrollmentInput] = useState('');
     const [message, setMessage] = useState(null);
+    const [txStep, setTxStep] = useState('');
+    const [consentRequests, setConsentRequests] = useState([]);
+    const [loadingRequests, setLoadingRequests] = useState(true);
+    const [studentCredentials, setStudentCredentials] = useState({});
+    const [loadingCreds, setLoadingCreds] = useState({});
     const [viewingPDF, setViewingPDF] = useState(null);
-    const [expandedStudent, setExpandedStudent] = useState(null);
 
-    const accessibleMarksheets = getAccessibleMarksheets(currentUser.id);
-    const myRequests = getCompanyRequests(currentUser.id);
+    const registeredWallet = currentUser?.wallet_address;
+    const walletOk = isConnected && isWalletMatch(registeredWallet);
+    const wrongWallet = isConnected && !isWalletMatch(registeredWallet);
 
-    const allStudents = users.filter(u => u.role === 'student');
-
-    // Group marksheets by student
-    const marksheetsByStudent = {};
-    accessibleMarksheets.forEach(m => {
-        if (!marksheetsByStudent[m.studentId]) {
-            marksheetsByStudent[m.studentId] = {
-                student: allStudents.find(s => s.id === m.studentId),
-                marksheets: []
-            };
+    const loadRequests = async () => {
+        try {
+            const token = localStorage.getItem('eduleger_token');
+            if (!token) return;
+            const res = await fetch(`${API_BASE}/consent/pending`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            if (res.ok) setConsentRequests(await res.json());
+        } catch { /* silent */ } finally {
+            setLoadingRequests(false);
         }
-        marksheetsByStudent[m.studentId].marksheets.push(m);
-    });
-
-    const handleRequest = (e) => {
-        e.preventDefault();
-        if (!studentIdInput) return;
-
-        const student = allStudents.find(s => s.id === studentIdInput || s.wallet === studentIdInput);
-        if (!student) {
-            setMessage({ type: 'error', text: 'Student ID or Wallet not found.' });
-            return;
-        }
-
-        const existing = myRequests.find(r => r.studentId === student.id && r.status === 'pending');
-        if (existing) {
-            setMessage({ type: 'error', text: 'Request already pending for this student.' });
-            return;
-        }
-
-        const approved = myRequests.find(r => r.studentId === student.id && r.status === 'approved');
-        if (approved) {
-            setMessage({ type: 'success', text: 'Access already granted!' });
-            return;
-        }
-
-        requestConsent(student.id);
-        setMessage({ type: 'success', text: `Consent requested from ${student.name}` });
-        setStudentIdInput('');
-        setTimeout(() => setMessage(null), 3000);
     };
 
-    const handleViewPDF = (pdfUrl) => {
-        if (pdfUrl) {
-            window.open(pdfUrl, '_blank');
-        } else {
-            alert('PDF not available');
+    useEffect(() => { loadRequests(); }, [currentUser?.id]);
+
+    const myRequests = consentRequests;
+    const approvedRequests = consentRequests.filter(r => r.status === 'approved');
+
+    const marksheetsByStudent = {};
+    approvedRequests.forEach(r => {
+        if (!marksheetsByStudent[r.student_id]) {
+            marksheetsByStudent[r.student_id] = {
+                studentName: r.student_name || r.student_enrollment || r.student_id,
+                studentId: r.student_id,
+                walletAddress: r.student_wallet || null
+            };
+        }
+    });
+
+    const loadStudentCredentials = async (studentId, studentWallet) => {
+        if (!studentWallet || typeof studentWallet !== 'string' || !studentWallet.startsWith('0x')) {
+            alert('Student wallet address missing or invalid.');
+            return;
+        }
+
+        setLoadingCreds(prev => ({ ...prev, [studentId]: true }));
+        try {
+            const provider = new JsonRpcProvider(HARDHAT_RPC);
+            const credContract = new Contract(
+                contractAddresses.localhost.AcademicCredentialSBT,
+                AcademicCredentialSBTArtifact.abi,
+                provider
+            );
+
+            const tokenIds = await credContract.getStudentCredentials(studentWallet);
+            const creds = await Promise.all(
+                tokenIds.map(async (id) => {
+                    const cred = await credContract.getCredential(id);
+                    let metadata = {};
+                    try {
+                        const uri = cred.metadataURI;
+                        if (uri.startsWith('data:application/json;base64,')) {
+                            const json = decodeURIComponent(escape(atob(uri.split(',')[1])));
+                            metadata = JSON.parse(json);
+                        } else {
+                            const metaUrl = resolveIPFSUrl(uri);
+                            const res = await fetch(metaUrl);
+                            metadata = await res.json();
+                        }
+                    } catch { /* ignore */ }
+
+                    const attr = (key) =>
+                        metadata.attributes?.find(a => a.trait_type === key)?.value || '';
+
+                    return {
+                        id: id.toString(),
+                        tokenId: id.toString(),
+                        metadataURI: cred.metadataURI,
+                        isRevoked: cred.isRevoked,
+                        description: metadata.description || metadata.name || 'Academic Credential',
+                        issuedDate: cred.issuedDate
+                            ? new Date(Number(cred.issuedDate) * 1000).toLocaleDateString()
+                            : 'N/A',
+                        studentName: attr('Student Name'),
+                        rollNumber: attr('Roll Number'),
+                        department: attr('Department'),
+                        year: attr('Academic Year'),
+                        cgpa: attr('CGPA'),
+                        degree: attr('Degree') || 'B.Tech',
+                        pdfUrl: metadata.credential_pdf
+                            ? resolveIPFSUrl(metadata.credential_pdf)
+                            : metadata.external_url
+                                ? resolveIPFSUrl(metadata.external_url)
+                                : null,
+                    };
+                })
+            );
+
+            setStudentCredentials(prev => ({
+                ...prev,
+                [studentId]: creds.filter(c => !c.isRevoked)
+            }));
+        } catch (err) {
+            console.error('Failed to load student credentials:', err);
+            alert('Failed to load credentials from blockchain.');
+        } finally {
+            setLoadingCreds(prev => ({ ...prev, [studentId]: false }));
+        }
+    };
+
+    const handleRequest = async (e) => {
+        e.preventDefault();
+        if (!enrollmentInput.trim()) return;
+        if (!walletOk) {
+            setMessage({ type: 'error', text: 'Connect the correct MetaMask account first (see wallet banner).' });
+            return;
+        }
+        setMessage(null);
+        setTxStep('');
+
+        try {
+            setTxStep('🔍 Resolving student wallet...');
+            const token = localStorage.getItem('eduleger_token');
+            const walletRes = await fetch(
+                `${API_BASE}/consent/student-wallet?enrollment_no=${enrollmentInput.trim()}`,
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            const walletData = await walletRes.json();
+            if (!walletRes.ok) {
+                setMessage({ type: 'error', text: walletData.error || 'Student not found.' });
+                setTxStep('');
+                return;
+            }
+
+            const studentWallet = walletData.wallet_address;
+            const studentName = walletData.student_name;
+
+            setTxStep('📝 Sending on-chain consent request (approve in MetaMask)...');
+            let onChainId = null;
+            try {
+                const consentContract = contracts?.consent;
+                if (!consentContract) throw new Error('ConsentManager contract not loaded');
+
+                const tx = await consentContract.requestConsent(studentWallet, currentUser.name);
+                setTxStep('⏳ Waiting for block confirmation...');
+                const receipt = await tx.wait();
+
+                const event = receipt.logs?.find(l => l.fragment?.name === 'ConsentRequested');
+                onChainId = event?.args?.consentId ?? null;
+            } catch (txErr) {
+                console.error('On-chain tx failed:', txErr.message);
+                setMessage({ type: 'error', text: `Transaction failed: ${txErr.message.slice(0, 150)}` });
+                setTxStep('');
+                return;
+            }
+
+            setTxStep('💾 Saving to database...');
+            const dbRes = await fetch(`${API_BASE}/consent/request`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ enrollment_no: enrollmentInput.trim(), on_chain_id: onChainId }),
+            });
+            const dbData = await dbRes.json();
+            if (!dbRes.ok) {
+                setMessage({ type: 'error', text: dbData.error || 'Saved on-chain but DB sync failed.' });
+            } else {
+                setMessage({ type: 'success', text: `✅ Consent request sent to ${studentName} on-chain!` });
+                setEnrollmentInput('');
+                loadRequests();
+            }
+        } catch (err) {
+            setMessage({ type: 'error', text: 'Cannot reach server.' });
+        } finally {
+            setTxStep('');
+            setTimeout(() => setMessage(null), 6000);
         }
     };
 
@@ -72,8 +204,19 @@ const CompanyDashboard = () => {
                 <p style={{ color: 'var(--text-muted)' }}>Welcome, {currentUser.name}. Verify future employees.</p>
             </div>
 
+            <WalletBanner
+                isConnected={isConnected}
+                walletOk={walletOk}
+                wrongWallet={wrongWallet}
+                shortAccount={shortAccount}
+                registeredWallet={registeredWallet}
+                connectWallet={connectWallet}
+                isConnecting={isConnecting}
+                error={error}
+                chainId={chainId}
+            />
+
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
-                {/* Left Column: Request Access */}
                 <div style={cardStyle}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
                         <Search size={24} style={{ color: 'var(--primary-color)' }} />
@@ -82,249 +225,182 @@ const CompanyDashboard = () => {
 
                     <form onSubmit={handleRequest} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                         <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>
-                            Enter the Student ID or Wallet Address to request permission to view their academic marksheets.
+                            Enter the Student Enrollment Number to send an on-chain consent request (requires MetaMask).
                         </p>
 
                         <div>
-                            <label style={labelStyle}>Student ID / Wallet</label>
+                            <label style={labelStyle}>Student Enrollment Number</label>
                             <input
                                 type="text"
                                 style={inputStyle}
-                                placeholder="e.g. s1 or 0xStudent1"
-                                value={studentIdInput}
-                                onChange={e => setStudentIdInput(e.target.value)}
+                                placeholder="e.g. STU2024001"
+                                value={enrollmentInput}
+                                onChange={e => setEnrollmentInput(e.target.value)}
                             />
                         </div>
 
-                        <button type="submit" style={buttonStyle}>
-                            Send Consent Request
+                        <button type="submit" style={{ ...buttonStyle, opacity: walletOk ? 1 : 0.6 }} disabled={!walletOk}>
+                            {walletOk ? 'Send On-Chain Consent Request ⛓' : 'Connect Correct Wallet First'}
                         </button>
 
+                        {txStep && (
+                            <div style={{ padding: '0.6rem 0.75rem', borderRadius: 'var(--radius)', backgroundColor: '#eff6ff', color: '#1e40af', fontSize: '0.875rem' }}>
+                                {txStep}
+                            </div>
+                        )}
                         {message && (
                             <div style={{
-                                marginTop: '1rem',
-                                padding: '0.75rem',
-                                borderRadius: 'var(--radius)',
+                                padding: '0.75rem', borderRadius: 'var(--radius)',
                                 backgroundColor: message.type === 'success' ? '#ecfdf5' : '#fef2f2',
                                 color: message.type === 'success' ? '#047857' : '#b91c1c',
-                                border: `1px solid ${message.type === 'success' ? '#a7f3d0' : '#fecaca'}`
+                                border: `1px solid ${message.type === 'success' ? '#a7f3d0' : '#fecaca'}`,
+                                fontSize: '0.875rem',
                             }}>
                                 {message.text}
                             </div>
                         )}
                     </form>
 
-                    {/* Pending Requests */}
                     <div style={{ marginTop: '2rem', paddingTop: '1.5rem', borderTop: '1px solid var(--border-color)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
                             <Clock size={20} style={{ color: '#d97706' }} />
                             <h3 style={{ fontSize: '1.125rem' }}>Pending Requests</h3>
                         </div>
-                        {myRequests.filter(r => r.status === 'pending').length === 0 ? (
+                        {loadingRequests ? (
+                            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>Loading...</p>
+                        ) : myRequests.filter(r => r.status === 'pending').length === 0 ? (
                             <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>No pending requests.</p>
                         ) : (
-                            myRequests.filter(r => r.status === 'pending').map(req => {
-                                const s = allStudents.find(s => s.id === req.studentId);
-                                return (
-                                    <div key={req.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.5rem', borderBottom: '1px solid var(--border-color)' }}>
-                                        <span style={{ fontSize: '0.875rem' }}>Request sent to {s?.name || req.studentId}</span>
-                                        <span style={{ fontSize: '0.75rem', color: '#d97706' }}>Pending</span>
+                            myRequests.filter(r => r.status === 'pending').map(req => (
+                                <div key={req.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem', borderBottom: '1px solid var(--border-color)' }}>
+                                    <div>
+                                        <span style={{ fontSize: '0.875rem' }}>
+                                            {req.student_name || req.student_enrollment || req.student_id}
+                                        </span>
+                                        {req.on_chain_id && (
+                                            <span style={{ marginLeft: '0.5rem', fontSize: '0.7rem', color: '#6366f1', backgroundColor: '#ede9fe', padding: '0.1rem 0.35rem', borderRadius: 4 }}>
+                                                ⛓ on-chain
+                                            </span>
+                                        )}
                                     </div>
-                                );
-                            })
+                                    <span style={{ fontSize: '0.75rem', color: '#d97706' }}>Pending</span>
+                                </div>
+                            ))
                         )}
                     </div>
                 </div>
 
-                {/* Right Column: Verified Students */}
                 <div style={cardStyle}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
                         <ShieldCheck size={24} style={{ color: 'var(--secondary-color)' }} />
                         <h3 style={{ fontSize: '1.25rem' }}>Verified Students</h3>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                        {Object.keys(marksheetsByStudent).length === 0 ? (
-                            <p style={{ color: 'var(--text-muted)' }}>No verified marksheets accessible yet.</p>
-                        ) : (
-                            Object.values(marksheetsByStudent).map(({ student, marksheets }) => {
-                                const isExpanded = expandedStudent === student.id;
-                                // Calculate CGPA from all courses in all marksheets
-                                const allCourses = marksheets.flatMap(m => m.courses || []);
-                                const cgpa = allCourses.length > 0 ? calculateCGPA(allCourses) : 0;
-
-                                return (
-                                    <div key={student.id} style={studentCardStyle}>
-                                        {/* Student Header */}
-                                        <div
-                                            style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-                                            onClick={() => setExpandedStudent(isExpanded ? null : student.id)}
-                                        >
-                                            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                                                <div style={{ backgroundColor: '#d1fae5', padding: '0.5rem', borderRadius: '50%' }}>
-                                                    <User size={20} color="var(--secondary-color)" />
-                                                </div>
-                                                <div>
-                                                    <div style={{ fontWeight: '600', fontSize: '1rem' }}>{student.name}</div>
-                                                </div>
-                                            </div>
-                                            <div style={{ textAlign: 'right' }}>
-                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>CGPA</div>
-                                                <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--primary-color)' }}>{cgpa}</div>
-                                            </div>
+                    {Object.keys(marksheetsByStudent).length === 0 ? (
+                        <p style={{ color: 'var(--text-muted)' }}>
+                            No verified access yet.<br />
+                            <span style={{ fontSize: '0.8rem' }}>Request consent from a student and wait for approval.</span>
+                        </p>
+                    ) : (
+                        Object.values(marksheetsByStudent).map(({ studentName, studentId, walletAddress }) => (
+                            <div key={studentId} style={{ ...studentCardStyle, cursor: Object.keys(studentCredentials).includes(studentId) ? 'default' : 'pointer' }} onClick={() => loadStudentCredentials(studentId, walletAddress)}>
+                                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', justifyContent: 'space-between' }}>
+                                    <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+                                        <div style={{ backgroundColor: '#d1fae5', padding: '0.5rem', borderRadius: '50%' }}>
+                                            <User size={20} color="var(--secondary-color)" />
                                         </div>
+                                        <div>
+                                            <div style={{ fontWeight: '600' }}>{studentName}</div>
+                                            <div style={{ fontSize: '0.75rem', color: '#059669' }}>✅ Consent approved</div>
+                                        </div>
+                                    </div>
+                                </div>
 
-                                        {/* Expanded Marksheets */}
-                                        {isExpanded && (
-                                            <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
-                                                <div style={{ fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.75rem' }}>
-                                                    Academic Records
-                                                </div>
-                                                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                                                    {marksheets.map(m => (
-                                                        <div key={m.id} style={marksheetItemStyle}>
-                                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start' }}>
-                                                                <div>
-                                                                    <div style={{ fontWeight: '500', fontSize: '0.875rem' }}>Academic Year {m.year}</div>
-                                                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{m.courses?.length || 0} courses</div>
-                                                                </div>
-                                                                <div style={{ textAlign: 'right' }}>
-                                                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>
-                                                                        Year: {m.year}
-                                                                    </div>
-                                                                    <div style={{ fontWeight: 'bold', color: 'var(--primary-color)' }}>{m.cgpa}</div>
-                                                                </div>
-                                                            </div>
-
-                                                            {/* Actions */}
-                                                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
-                                                                <button
-                                                                    onClick={() => window.open(m.pdfUrl, '_blank')}
-                                                                    style={verifyIPFSButtonStyle}
-                                                                >
-                                                                    <FileText size={14} /> Verify
-                                                                </button>
-                                                            </div>
+                                {studentCredentials[studentId] && (
+                                    <div style={{ marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                                        {studentCredentials[studentId].length === 0 ? (
+                                            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>No valid credentials found on-chain.</p>
+                                        ) : (
+                                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '1rem' }}>
+                                                {studentCredentials[studentId].map(cred => (
+                                                    <div
+                                                        key={cred.id}
+                                                        onClick={() => setViewingPDF(cred)}
+                                                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'white', padding: '0.75rem', borderRadius: 'var(--radius)', border: '1px solid #e5e7eb', cursor: 'pointer', transition: 'background-color 0.2s' }}
+                                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#f9fafb'}
+                                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'white'}
+                                                    >
+                                                        <div>
+                                                            <div style={{ fontSize: '0.875rem', fontWeight: 500 }}>{cred.description || 'Academic Credential'}</div>
+                                                            <div style={{ fontSize: '0.7rem', color: '#6366f1', marginTop: '0.2rem' }}>⛓ Token #{cred.id || cred.tokenId}</div>
                                                         </div>
-                                                    ))}
-                                                </div>
+                                                    </div>
+                                                ))}
                                             </div>
                                         )}
                                     </div>
-                                );
-                            })
-                        )}
-                    </div>
+                                )}
+                            </div>
+                        ))
+                    )}
                 </div>
             </div>
 
-            {/* PDF Viewer Modal */}
+            {/* NFT Detail Modal */}
             {viewingPDF && (
-                <div style={modalOverlay} onClick={() => setViewingPDF(null)}>
-                    <div style={modalContent} onClick={e => e.stopPropagation()}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                            <h3>Official Marksheet</h3>
-                            <button onClick={() => setViewingPDF(null)} style={{ fontSize: '1.5rem', border: 'none', background: 'none', cursor: 'pointer' }}>×</button>
-                        </div>
-                        <iframe
-                            src={viewingPDF}
-                            style={{ width: '100%', height: '600px', border: 'none', borderRadius: 'var(--radius)' }}
-                            title="Marksheet PDF"
-                        />
-                    </div>
-                </div>
+                <CredentialNFTModal
+                    credential={viewingPDF}
+                    contractAddress={contractAddresses.localhost.AcademicCredentialSBT}
+                    onClose={() => setViewingPDF(null)}
+                />
             )}
         </div>
     );
 };
 
-// Styles
-const cardStyle = {
-    backgroundColor: 'var(--surface-color)',
-    padding: '1.5rem',
-    borderRadius: '1rem',
-    boxShadow: 'var(--shadow)',
-    border: '1px solid var(--border-color)',
-    height: 'fit-content'
+const WalletBanner = ({ isConnected, walletOk, wrongWallet, shortAccount, registeredWallet, connectWallet, isConnecting, error, chainId }) => {
+    const shortExpected = registeredWallet
+        ? `${registeredWallet.slice(0, 6)}...${registeredWallet.slice(-4)}`
+        : null;
+
+    let bg = '#fef3c7', border = '#fcd34d', text = null;
+    if (walletOk) { bg = '#d1fae5'; border = '#6ee7b7'; }
+    if (wrongWallet) { bg = '#fef2f2'; border = '#fecaca'; }
+
+    return (
+        <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem', borderRadius: 'var(--radius)', marginBottom: '1rem', backgroundColor: bg, border: `1px solid ${border}` }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
+                    <Wallet size={16} />
+                    {walletOk && <><strong>Wallet:</strong> {shortAccount} &nbsp;|&nbsp; On-chain consent <strong style={{ color: '#059669' }}>enabled ⛓</strong></>}
+                    {wrongWallet && <><AlertTriangle size={14} style={{ color: '#b91c1c' }} /> <strong style={{ color: '#b91c1c' }}>Wrong account!</strong> Switch MetaMask to <code style={{ backgroundColor: '#fee2e2', padding: '0.1rem 0.3rem', borderRadius: 3 }}>{shortExpected}</code></>}
+                    {!isConnected && <><span>Connect MetaMask to send on-chain consent</span></>}
+                </div>
+                {!isConnected && (
+                    <button onClick={connectWallet} disabled={isConnecting} style={walletBtnStyle}>
+                        {isConnecting ? 'Connecting...' : 'Connect Wallet'}
+                    </button>
+                )}
+            </div>
+            {error && (
+                <div style={{ padding: '0.6rem 1rem', borderRadius: 'var(--radius)', marginBottom: '1rem', backgroundColor: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: '0.875rem' }}>
+                    ⚠️ {error}
+                </div>
+            )}
+            {isConnected && chainId && chainId !== '31337' && chainId !== 31337 && (
+                <div style={{ padding: '0.6rem 1rem', borderRadius: 'var(--radius)', marginBottom: '1rem', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', fontSize: '0.875rem' }}>
+                    ⚠️ Wrong network! Switch MetaMask to <strong>Hardhat Local (Chain 31337)</strong>.
+                </div>
+            )}
+        </>
+    );
 };
 
-const labelStyle = {
-    display: 'block',
-    fontSize: '0.875rem',
-    fontWeight: '500',
-    marginBottom: '0.5rem',
-    color: 'var(--text-main)'
-};
-
-const inputStyle = {
-    width: '100%',
-    padding: '0.625rem',
-    borderRadius: 'var(--radius)',
-    border: '1px solid var(--border-color)',
-    fontSize: '0.875rem',
-    outline: 'none',
-    transition: 'border-color 0.2s'
-};
-
-const buttonStyle = {
-    width: '100%',
-    padding: '0.75rem',
-    backgroundColor: 'var(--primary-color)',
-    color: 'white',
-    fontWeight: '600',
-    borderRadius: 'var(--radius)',
-    border: 'none',
-    marginTop: '0.5rem',
-    transition: 'background-color 0.2s',
-    cursor: 'pointer'
-};
-
-const studentCardStyle = {
-    padding: '1rem',
-    borderRadius: '0.75rem',
-    border: '1px solid var(--border-color)',
-    backgroundColor: '#f9fafb'
-};
-
-const marksheetItemStyle = {
-    padding: '0.75rem',
-    backgroundColor: 'white',
-    borderRadius: 'var(--radius)',
-    border: '1px solid #e5e7eb'
-};
-
-const viewPDFButtonStyle = {
-    flex: 1,
-    padding: '0.5rem',
-    backgroundColor: 'var(--primary-color)',
-    color: 'white',
-    border: 'none',
-    borderRadius: 'var(--radius)',
-    fontSize: '0.75rem',
-    fontWeight: '500',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '0.25rem'
-};
-
-const verifyIPFSButtonStyle = {
-    flex: 1,
-    padding: '0.5rem',
-    backgroundColor: 'white',
-    color: 'var(--primary-color)',
-    border: '1px solid var(--primary-color)',
-    borderRadius: 'var(--radius)',
-    fontSize: '0.75rem',
-    fontWeight: '500',
-    cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '0.25rem'
-};
-
+const cardStyle = { backgroundColor: 'var(--surface-color)', padding: '1.5rem', borderRadius: '1rem', boxShadow: 'var(--shadow)', border: '1px solid var(--border-color)', height: 'fit-content' };
+const labelStyle = { display: 'block', fontSize: '0.875rem', fontWeight: '500', marginBottom: '0.5rem', color: 'var(--text-main)' };
+const inputStyle = { width: '100%', padding: '0.625rem', borderRadius: 'var(--radius)', border: '1px solid var(--border-color)', fontSize: '0.875rem', outline: 'none', boxSizing: 'border-box' };
+const buttonStyle = { width: '100%', padding: '0.75rem', backgroundColor: 'var(--primary-color)', color: 'white', fontWeight: '600', borderRadius: 'var(--radius)', border: 'none', marginTop: '0.5rem', cursor: 'pointer' };
+const studentCardStyle = { padding: '1rem', borderRadius: '0.75rem', border: '1px solid var(--border-color)', backgroundColor: '#f9fafb', marginBottom: '0.75rem' };
 const modalOverlay = {
     position: 'fixed',
     top: 0,
@@ -333,18 +409,21 @@ const modalOverlay = {
     bottom: 0,
     backgroundColor: 'rgba(0, 0, 0, 0.7)',
     display: 'flex',
-    alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 1000
+    alignItems: 'center',
+    zIndex: 1000,
+    padding: '2rem'
 };
 
 const modalContent = {
     backgroundColor: 'white',
     padding: '1.5rem',
     borderRadius: '1rem',
-    maxWidth: '90%',
-    width: '800px',
-    maxHeight: '90vh'
+    width: '100%',
+    maxWidth: '800px',
+    boxShadow: 'var(--shadow-lg)'
 };
+
+const walletBtnStyle = { padding: '0.5rem 1rem', backgroundColor: 'var(--primary-color)', color: 'white', border: 'none', borderRadius: 'var(--radius)', fontSize: '0.875rem', fontWeight: '600', cursor: 'pointer' };
 
 export default CompanyDashboard;

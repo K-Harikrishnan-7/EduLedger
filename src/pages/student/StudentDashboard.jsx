@@ -1,26 +1,191 @@
-import React, { useState } from 'react';
-import { useBlockchain } from '../../context/MockBlockchainContext';
-import { Award, ShieldCheck, XCircle, CheckCircle, Clock, Download, ExternalLink, FileText } from 'lucide-react';
-import { calculateCGPA } from '../../utils/gradeCalculator';
+import React, { useState, useEffect } from 'react';
+import { JsonRpcProvider, Contract } from 'ethers';
+import { useBlockchain } from '../../context/AppContext';
+import { useWeb3 } from '../../context/Web3Context';
+import { Award, ShieldCheck, XCircle, CheckCircle, Clock, FileText, Wallet, AlertCircle, AlertTriangle } from 'lucide-react';
+import { resolveIPFSUrl } from '../../services/ipfsService';
+import AcademicCredentialSBTArtifact from '../../contracts/artifacts/contracts/AcademicCredentialSBT.sol/AcademicCredentialSBT.json';
+import MarksheetTokenCard from '../../components/MarksheetTokenCard';
+import ConsentManagerArtifact from '../../contracts/artifacts/contracts/ConsentManager.sol/ConsentManager.json';
+import contractAddresses from '../../contracts/addresses.json';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const HARDHAT_RPC = 'http://127.0.0.1:8545';
 
 const StudentDashboard = () => {
-    const { currentUser, getStudentMarksheets, getStudentRequests, respondToConsent } = useBlockchain();
-    const [activeTab, setActiveTab] = useState('credentials'); // 'credentials' | 'requests'
+    const { currentUser, authHeaders } = useBlockchain();
+    const { isConnected, connectWallet, isConnecting, shortAccount, account, error, chainId, isWalletMatch, contracts } = useWeb3();
+    const [activeTab, setActiveTab] = useState('credentials');
     const [viewingPDF, setViewingPDF] = useState(null);
+    const [consentLoading, setConsentLoading] = useState(null);
 
-    const marksheets = getStudentMarksheets(currentUser.id);
-    const requests = getStudentRequests(currentUser.id);
+    // ── ON-CHAIN CREDENTIALS — read using student's registered wallet (not MetaMask) ──
+    const [onChainCredentials, setOnChainCredentials] = useState([]);
+    const [loadingCredentials, setLoadingCredentials] = useState(true);
+
+    const loadOnChainCredentials = async () => {
+        // Use the student's wallet address stored in DB — not MetaMask account
+        const studentWallet = currentUser?.wallet_address;
+        if (!studentWallet) {
+            setLoadingCredentials(false);
+            return;
+        }
+        setLoadingCredentials(true);
+        try {
+            // Read-only provider — no MetaMask needed to read from chain
+            const provider = new JsonRpcProvider(HARDHAT_RPC);
+            const credContract = new Contract(
+                contractAddresses.localhost.AcademicCredentialSBT,
+                AcademicCredentialSBTArtifact.abi,
+                provider
+            );
+
+            const tokenIds = await credContract.getStudentCredentials(studentWallet);
+            const creds = await Promise.all(
+                tokenIds.map(async (id) => {
+                    const cred = await credContract.getCredential(id);
+                    let metadata = {};
+                    try {
+                        const uri = cred.metadataURI;
+                        if (uri.startsWith('data:application/json;base64,')) {
+                            // Embedded metadata (dev mode without Pinata)
+                            const json = decodeURIComponent(escape(atob(uri.split(',')[1])));
+                            metadata = JSON.parse(json);
+                        } else {
+                            // IPFS or HTTP URI
+                            const metaUrl = resolveIPFSUrl(uri);
+                            const res = await fetch(metaUrl);
+                            metadata = await res.json();
+                        }
+                    } catch { /* metadata unavailable */ }
+
+                    const attr = (key) =>
+                        metadata.attributes?.find(a => a.trait_type === key)?.value || '';
+
+                    return {
+                        id: id.toString(),
+                        tokenId: id.toString(),
+                        metadataURI: cred.metadataURI,
+                        issuedDate: cred.issuedDate
+                            ? new Date(Number(cred.issuedDate) * 1000).toLocaleDateString()
+                            : 'N/A',
+                        isRevoked: cred.isRevoked,
+                        description: metadata.description || metadata.name || 'Academic Credential',
+                        year: attr('Academic Year'),
+                        department: attr('Department'),
+                        cgpa: attr('CGPA'),
+                        rollNumber: attr('Roll Number'),
+                        studentName: attr('Student Name'),
+                        pdfUrl: metadata.credential_pdf
+                            ? resolveIPFSUrl(metadata.credential_pdf)
+                            : metadata.external_url
+                                ? resolveIPFSUrl(metadata.external_url)
+                                : null,
+                    };
+                })
+            );
+            setOnChainCredentials(creds.filter(c => !c.isRevoked));
+        } catch (err) {
+            console.error('Failed to load on-chain credentials:', err);
+        } finally {
+            setLoadingCredentials(false);
+        }
+    };
+
+    // Load credentials on mount using DB wallet — no MetaMask dependency
+    useEffect(() => { loadOnChainCredentials(); }, [currentUser?.wallet_address]);
+
+    // ── CONSENT REQUESTS (from backend DB) ──────────────────────────────────
+    const [requests, setRequests] = useState([]);
+    const [loadingRequests, setLoadingRequests] = useState(true);
+
+    const loadRequests = async () => {
+        try {
+            const token = localStorage.getItem('eduleger_token');
+            if (!token) return;
+            const res = await fetch(`${API_BASE}/consent/pending`, {
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setRequests(data.map(r => ({
+                    id: r.id,
+                    status: r.status,
+                    on_chain_id: r.token_id || null,
+                    companyName: r.company?.user?.name || r.company?.name || 'Unknown Company',
+                    requestDate: r.created_at ? new Date(r.created_at).toLocaleDateString() : '',
+                })));
+            } else {
+                const err = await res.json().catch(() => ({}));
+                console.error('Consent fetch failed:', res.status, err);
+            }
+        } catch (err) {
+            console.error('Consent fetch error:', err);
+        } finally {
+            setLoadingRequests(false);
+        }
+    };
+
+    // Re-fetch whenever logged-in user changes
+    useEffect(() => { loadRequests(); }, [currentUser?.id]);
+
+    // Poll every 10 seconds so new requests appear automatically
+    useEffect(() => {
+        const interval = setInterval(loadRequests, 10000);
+        return () => clearInterval(interval);
+    }, [currentUser?.id]);
+
     const pendingRequests = requests.filter(r => r.status === 'pending');
 
-    // Calculate overall CGPA from all courses in all marksheets
-    const allCourses = marksheets.flatMap(m => m.courses || []);
-    const cgpa = allCourses.length > 0 ? calculateCGPA(allCourses) : null;
-
     const handleViewPDF = (pdfUrl) => {
-        if (pdfUrl) {
-            window.open(pdfUrl, '_blank');
-        } else {
-            alert('PDF not available');
+        if (pdfUrl) window.open(pdfUrl, '_blank');
+        else alert('PDF not available — may not be pinned to IPFS yet.');
+    };
+
+    const registeredWallet = currentUser?.wallet_address;
+    const walletOk = isConnected && isWalletMatch(registeredWallet);
+    const wrongWallet = isConnected && !isWalletMatch(registeredWallet);
+    const shortExpected = registeredWallet
+        ? `${registeredWallet.slice(0, 6)}...${registeredWallet.slice(-4)}`
+        : null;
+
+    const handleConsent = async (req, action) => {
+        if (!walletOk) {
+            alert('Please connect your registered MetaMask wallet first.');
+            return;
+        }
+        setConsentLoading(req.id);
+        try {
+            // Step 1: On-chain transaction
+            if (req.on_chain_id && contracts?.consent) {
+                try {
+                    let tx;
+                    if (action === 'approved') {
+                        tx = await contracts.consent.approveConsent(req.on_chain_id, 30); // 30-day consent
+                    } else {
+                        tx = await contracts.consent.revokeConsent(req.on_chain_id);
+                    }
+                    await tx.wait();
+                    console.log(`✅ On-chain ${action} for consent ${req.on_chain_id}`);
+                } catch (txErr) {
+                    console.error('On-chain consent action failed:', txErr.message);
+                    alert(`On-chain transaction failed: ${txErr.message.slice(0, 120)}`);
+                    return;
+                }
+            }
+
+            // Step 2: DB sync
+            const endpoint = action === 'approved' ? 'approve' : 'revoke';
+            const res = await fetch(`${API_BASE}/consent/${endpoint}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...authHeaders() },
+                body: JSON.stringify({ consent_id: req.id }),
+            });
+            if (res.ok) await loadRequests();
+        } catch (err) {
+            console.error('Consent action failed:', err.message);
+        } finally {
+            setConsentLoading(null);
         }
     };
 
@@ -30,6 +195,45 @@ const StudentDashboard = () => {
                 <h2 style={{ fontSize: '1.875rem', marginBottom: '0.5rem' }}>Student Dashboard</h2>
                 <p style={{ color: 'var(--text-muted)' }}>Welcome, {currentUser.name}. Manage your academic portfolio.</p>
             </div>
+
+            {/* SBT Wallet (read-only, from DB) */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1rem', borderRadius: 'var(--radius)', marginBottom: '0.75rem', backgroundColor: '#f0f9ff', border: '1px solid #bae6fd' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
+                    <Wallet size={16} />
+                    <strong>Your SBT Wallet:</strong>&nbsp;
+                    <code style={{ backgroundColor: '#e0f2fe', padding: '0.1rem 0.4rem', borderRadius: 4 }}>
+                        {registeredWallet ? `${registeredWallet.slice(0, 6)}...${registeredWallet.slice(-4)}` : 'Not registered'}
+                    </code>
+                    &nbsp;— Credentials load automatically from blockchain
+                </div>
+            </div>
+
+            {/* MetaMask Wallet (for signing consent) */}
+            <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '0.75rem 1rem', borderRadius: 'var(--radius)', marginBottom: '0.75rem',
+                backgroundColor: walletOk ? '#d1fae5' : wrongWallet ? '#fef2f2' : '#fef3c7',
+                border: `1px solid ${walletOk ? '#6ee7b7' : wrongWallet ? '#fecaca' : '#fcd34d'}`
+            }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
+                    <Wallet size={16} />
+                    {walletOk && <><strong>Signing Wallet:</strong> {shortAccount} &nbsp;|&nbsp; Consent actions <strong style={{ color: '#059669' }}>enabled ⛓</strong></>}
+                    {wrongWallet && <><AlertTriangle size={14} style={{ color: '#b91c1c' }} /> <strong style={{ color: '#b91c1c' }}>Wrong account!</strong> Switch to <code style={{ backgroundColor: '#fee2e2', padding: '0.1rem 0.3rem', borderRadius: 3 }}>{shortExpected}</code> in MetaMask</>}
+                    {!isConnected && <>Connect MetaMask (your student wallet <code>{shortExpected}</code>) to approve/reject consent</>}
+                </div>
+                {!isConnected && (
+                    <button onClick={connectWallet} disabled={isConnecting} style={{ padding: '0.4rem 0.9rem', backgroundColor: 'var(--primary-color)', color: 'white', border: 'none', borderRadius: 'var(--radius)', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer' }}>
+                        {isConnecting ? 'Connecting...' : 'Connect Wallet'}
+                    </button>
+                )}
+            </div>
+
+
+            {error && (
+                <div style={{ padding: '0.6rem 1rem', borderRadius: 'var(--radius)', marginBottom: '0.75rem', backgroundColor: '#fef2f2', border: '1px solid #fecaca', color: '#b91c1c', fontSize: '0.875rem' }}>
+                    ⚠️ {error}
+                </div>
+            )}
 
             {/* Tabs */}
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', borderBottom: '1px solid var(--border-color)' }}>
@@ -61,61 +265,47 @@ const StudentDashboard = () => {
 
             {/* Content */}
             {activeTab === 'credentials' && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', gap: '1.5rem' }}>
-                    {marksheets.length === 0 ? (
-                        <p style={{ color: 'var(--text-muted)' }}>No credentials issued to you yet.</p>
+                <div>
+                    {loadingCredentials ? (
+                        /* ── Loading from chain ── */
+                        <div style={{ textAlign: 'center', padding: '3rem', color: 'var(--text-muted)' }}>
+                            <div style={{ fontSize: '2rem', marginBottom: '1rem' }}>⛓️</div>
+                            <p>Reading credentials from blockchain...</p>
+                        </div>
+                    ) : onChainCredentials.length === 0 ? (
+                        /* ── No tokens yet ── */
+                        <div style={{
+                            textAlign: 'center', padding: '3rem 2rem',
+                            backgroundColor: 'var(--surface-color)',
+                            borderRadius: '1rem', border: '1px solid var(--border-color)'
+                        }}>
+                            <AlertCircle size={48} style={{ color: 'var(--text-muted)', marginBottom: '1rem' }} />
+                            <h3 style={{ fontSize: '1.125rem', marginBottom: '0.5rem' }}>No credentials yet</h3>
+                            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                                No SBTs found for wallet <code style={{ backgroundColor: '#f3f4f6', padding: '0.1rem 0.4rem', borderRadius: 4 }}>
+                                    {currentUser.wallet_address
+                                        ? `${currentUser.wallet_address.slice(0, 6)}...${currentUser.wallet_address.slice(-4)}`
+                                        : 'unknown'}
+                                </code>.<br />
+                                Ask your university to issue your marksheet.
+                            </p>
+                        </div>
                     ) : (
-                        marksheets.map(m => (
-                            <div key={m.id} style={credentialCardStyle}>
-                                {/* Header */}
-                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '1rem' }}>
-                                    <div style={{ backgroundColor: '#e0e7ff', padding: '0.5rem', borderRadius: '0.5rem' }}>
-                                        <Award size={24} color="var(--primary-color)" />
-                                    </div>
-                                </div>
-
-                                {/* Title */}
-                                <h3 style={{ fontSize: '1.25rem', marginBottom: '0.25rem' }}>Official Marksheet</h3>
-                                <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
-                                    Academic Year {m.year} • {m.courses?.length || 0} courses
-                                </p>
-
-                                {/* CGPA Display */}
-                                <div style={{
-                                    backgroundColor: '#f0f9ff',
-                                    padding: '1rem',
-                                    borderRadius: 'var(--radius)',
-                                    marginBottom: '1rem',
-                                    textAlign: 'center'
-                                }}>
-                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.25rem' }}>CGPA</div>
-                                    <div style={{ fontSize: '2rem', fontWeight: 'bold', color: 'var(--primary-color)' }}>{m.cgpa}</div>
-                                </div>
-
-                                {/* Actions */}
-                                <div style={{ display: 'flex', gap: '0.5rem', paddingTop: '1rem', borderTop: '1px solid var(--border-color)' }}>
-                                    <button
-                                        onClick={() => handleViewPDF(m.pdfUrl)}
-                                        style={viewButtonStyle}
-                                    >
-                                        <FileText size={14} /> View PDF
-                                    </button>
-                                    <button
-                                        onClick={() => window.open(m.pdfUrl, '_blank')}
-                                        style={verifyButtonStyle}
-                                    >
-                                        <Download size={14} /> Download
-                                    </button>
-                                </div>
-                            </div>
-                        ))
+                        /* ── Credential Cards (from blockchain) ── */
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1.5rem', justifyContent: 'flex-start' }}>
+                            {onChainCredentials.map(cred => (
+                                <MarksheetTokenCard key={cred.id} credential={cred} contractAddress={contractAddresses.localhost.AcademicCredentialSBT} />
+                            ))}
+                        </div>
                     )}
                 </div>
             )}
 
             {activeTab === 'requests' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '800px' }}>
-                    {requests.length === 0 ? (
+                    {loadingRequests ? (
+                        <p style={{ color: 'var(--text-muted)' }}>Loading consent requests...</p>
+                    ) : requests.length === 0 ? (
                         <p style={{ color: 'var(--text-muted)' }}>No consent requests yet.</p>
                     ) : (
                         requests.slice().reverse().map(req => (
@@ -142,36 +332,28 @@ const StudentDashboard = () => {
                                 {req.status === 'pending' && (
                                     <div style={{ display: 'flex', gap: '0.75rem' }}>
                                         <button
-                                            onClick={() => respondToConsent(req.id, 'rejected')}
+                                            onClick={() => handleConsent(req, 'rejected')}
+                                            disabled={consentLoading === req.id}
                                             style={{
-                                                padding: '0.5rem 1rem',
-                                                borderRadius: 'var(--radius)',
-                                                border: '1px solid var(--danger-color)',
-                                                color: 'var(--danger-color)',
-                                                backgroundColor: 'white',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                gap: '0.25rem',
-                                                cursor: 'pointer'
+                                                padding: '0.5rem 1rem', borderRadius: 'var(--radius)',
+                                                border: '1px solid var(--danger-color)', color: 'var(--danger-color)',
+                                                backgroundColor: 'white', display: 'flex', alignItems: 'center',
+                                                gap: '0.25rem', cursor: 'pointer'
                                             }}
                                         >
-                                            <XCircle size={16} /> Reject
+                                            <XCircle size={16} /> {consentLoading === req.id ? '...' : 'Reject'}
                                         </button>
                                         <button
-                                            onClick={() => respondToConsent(req.id, 'approved')}
+                                            onClick={() => handleConsent(req, 'approved')}
+                                            disabled={consentLoading === req.id}
                                             style={{
-                                                padding: '0.5rem 1rem',
-                                                borderRadius: 'var(--radius)',
-                                                backgroundColor: 'var(--secondary-color)',
-                                                color: 'white',
-                                                border: 'none',
-                                                display: 'flex',
-                                                alignItems: 'center',
-                                                gap: '0.25rem',
-                                                cursor: 'pointer'
+                                                padding: '0.5rem 1rem', borderRadius: 'var(--radius)',
+                                                backgroundColor: 'var(--secondary-color)', color: 'white',
+                                                border: 'none', display: 'flex', alignItems: 'center',
+                                                gap: '0.25rem', cursor: 'pointer'
                                             }}
                                         >
-                                            <CheckCircle size={16} /> Approve
+                                            <CheckCircle size={16} /> {consentLoading === req.id ? '...' : 'Approve (30d)'}
                                         </button>
                                     </div>
                                 )}
@@ -293,6 +475,17 @@ const modalContent = {
     maxWidth: '90%',
     width: '800px',
     maxHeight: '90vh'
+};
+
+const walletBtnStyle = {
+    padding: '0.5rem 1rem',
+    backgroundColor: 'var(--primary-color)',
+    color: 'white',
+    border: 'none',
+    borderRadius: 'var(--radius)',
+    fontSize: '0.875rem',
+    fontWeight: '600',
+    cursor: 'pointer',
 };
 
 export default StudentDashboard;
