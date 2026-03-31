@@ -6,11 +6,12 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-
 async function main() {
-    const [deployer, universityAccount] = await hre.ethers.getSigners();
+    const [deployer] = await hre.ethers.getSigners();
+    const networkName = hre.network.name;
 
     console.log("Deploying contracts with account:", deployer.address);
+    console.log("Network:", networkName);
     console.log("Account balance:", (await hre.ethers.provider.getBalance(deployer.address)).toString());
 
     // Deploy UniversityRegistry
@@ -37,17 +38,22 @@ async function main() {
     const consentManagerAddress = await consentManager.getAddress();
     console.log("✅ ConsentManager deployed to:", consentManagerAddress);
 
-    // Register test university (using the second signer)
-    console.log("\n🏫 Registering test university: Rajalakshmi Engineering College...");
-    const tx = await registry.registerUniversity(
-        universityAccount.address,
-        "Rajalakshmi Engineering College"
-    );
-    await tx.wait();
-    console.log("✅ University registered. Wallet:", universityAccount.address);
+    // ── Hardhat-only: register a test university using the second local signer ──
+    if (networkName === "hardhat" || networkName === "localhost") {
+        const [, universityAccount] = await hre.ethers.getSigners();
+        console.log("\n🏫 Registering test university (Hardhat only)...");
+        const tx = await registry.registerUniversity(
+            universityAccount.address,
+            "Rajalakshmi Engineering College"
+        );
+        await tx.wait();
+        console.log("✅ University registered. Wallet:", universityAccount.address);
+    } else {
+        console.log("\n⚠️  Sepolia deploy: university must self-register via the app frontend.");
+        console.log("   Go to the app → login as university → 'Register University' (or call registerUniversity() separately).");
+    }
 
     // Save addresses to src/contracts/addresses.json
-    const networkName = hre.network.name;
     const addressesPath = path.join(__dirname, "../src/contracts/addresses.json");
 
     let existingAddresses = {};
@@ -59,7 +65,6 @@ async function main() {
         UniversityRegistry: registryAddress,
         AcademicCredentialSBT: credentialSBTAddress,
         ConsentManager: consentManagerAddress,
-        testUniversityWallet: universityAccount.address,
         deployedAt: new Date().toISOString()
     };
 
@@ -68,11 +73,11 @@ async function main() {
 
     console.log("\n🎉 Deployment complete!");
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("Network        :", networkName);
+    console.log("Network              :", networkName);
     console.log("UniversityRegistry   :", registryAddress);
     console.log("AcademicCredentialSBT:", credentialSBTAddress);
     console.log("ConsentManager       :", consentManagerAddress);
-    console.log("Test University Wallet:", universityAccount.address);
+    console.log("Deployer wallet      :", deployer.address);
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }
 

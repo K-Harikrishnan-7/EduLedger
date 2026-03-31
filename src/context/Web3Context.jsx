@@ -92,7 +92,7 @@ export const Web3Provider = ({ children }) => {
             } else if (code === -32603) {
                 setError('MetaMask internal error. Try refreshing the page.');
             } else {
-                setError('Could not connect wallet. Make sure MetaMask is unlocked and on Hardhat Local network.');
+                setError('Could not connect wallet. Make sure MetaMask is unlocked and on the correct network (Hardhat Local or Sepolia).');
             }
         } finally {
             setIsConnecting(false);
@@ -180,7 +180,9 @@ export const Web3Provider = ({ children }) => {
         isWalletMatch: (expected) =>
             !!account && !!expected && account.toLowerCase() === expected.toLowerCase(),
         // Helpers
-        isLocalNetwork: chainId === '31337',
+        // Returns true if connected MetaMask chain matches the configured chain (Hardhat or Sepolia)
+        isLocalNetwork: chainId === '31337' || chainId === 31337,
+        isSepoliaNetwork: chainId === '11155111' || chainId === 11155111,
         shortAccount: account ? `${account.slice(0, 6)}...${account.slice(-4)}` : null,
     };
 

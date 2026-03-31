@@ -27,6 +27,7 @@ const UniversityDashboard = () => {
     const [loadingStep, setLoadingStep] = useState('');
 
     const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+    const EXPECTED_CHAIN_ID = import.meta.env.VITE_CHAIN_ID || '31337';
     const token = () => localStorage.getItem('eduleger_token');
 
     // Load degrees on mount
@@ -166,7 +167,7 @@ const UniversityDashboard = () => {
 
             // ── Step 3: Mint SBT ──────────────────────────────────────────────
             if (isConnected && contracts?.credential && student.wallet) {
-                setLoadingStep('⛓️ Minting Soulbound Token on Hardhat...');
+                setLoadingStep(`⛓️ Minting Soulbound Token on ${EXPECTED_CHAIN_ID === '11155111' ? 'Sepolia' : 'Hardhat'}...`);
                 try {
                     const tx = await contracts.credential.mintCredential(student.wallet, metadataUri);
                     setLoadingStep('⏳ Waiting for block confirmation...');
@@ -253,8 +254,9 @@ const UniversityDashboard = () => {
                             {!isConnected && <>Connect MetaMask to enable on-chain SBT minting</>}
                         </div>
                         {error && <span style={{ fontSize: '0.8rem', color: '#b91c1c' }}>⚠️ {error}</span>}
-                        {isConnected && chainId && chainId !== '31337' && chainId !== 31337 && (
-                            <span style={{ fontSize: '0.8rem', color: '#92400e' }}>⚠️ Switch to Hardhat Local (31337)</span>
+                        {isConnected && chainId && String(chainId) !== String(EXPECTED_CHAIN_ID) && (
+                            <span style={{ fontSize: '0.8rem', color: '#92400e' }}
+                            >⚠️ Switch to {EXPECTED_CHAIN_ID === '11155111' ? 'Sepolia (11155111)' : 'Hardhat Local (31337)'}</span>
                         )}
                         {!isConnected && (
                             <button onClick={connectWallet} disabled={isConnecting} style={walletBtnStyle}>

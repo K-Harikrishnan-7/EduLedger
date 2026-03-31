@@ -10,7 +10,9 @@ import AcademicCredentialSBTArtifact from '../../contracts/artifacts/contracts/A
 import CredentialNFTModal from '../../components/CredentialNFTModal';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-const HARDHAT_RPC = 'http://127.0.0.1:8545';
+const RPC_URL = import.meta.env.VITE_RPC_URL || 'http://127.0.0.1:8545';
+const EXPECTED_CHAIN_ID = import.meta.env.VITE_CHAIN_ID || '31337';
+const CONTRACT_NETWORK = EXPECTED_CHAIN_ID === '11155111' ? 'sepolia' : 'localhost';
 
 const CompanyDashboard = () => {
     const { currentUser, authHeaders } = useBlockchain();
@@ -66,9 +68,9 @@ const CompanyDashboard = () => {
 
         setLoadingCreds(prev => ({ ...prev, [studentId]: true }));
         try {
-            const provider = new JsonRpcProvider(HARDHAT_RPC);
+            const provider = new JsonRpcProvider(RPC_URL);
             const credContract = new Contract(
-                contractAddresses.localhost.AcademicCredentialSBT,
+                contractAddresses[CONTRACT_NETWORK].AcademicCredentialSBT,
                 AcademicCredentialSBTArtifact.abi,
                 provider
             );
@@ -90,29 +92,25 @@ const CompanyDashboard = () => {
                         }
                     } catch { /* ignore */ }
 
-                    const attr = (key) =>
-                        metadata.attributes?.find(a => a.trait_type === key)?.value || '';
+                    // Helper to extract specific trait
+                    const attr = (traitType) =>
+                        metadata.attributes?.find(a => a.trait_type === traitType)?.value || '';
 
                     return {
                         id: id.toString(),
-                        tokenId: id.toString(),
-                        metadataURI: cred.metadataURI,
+                        tokenId: id.toString(), // ensure tokenId is always present
                         isRevoked: cred.isRevoked,
                         description: metadata.description || metadata.name || 'Academic Credential',
-                        issuedDate: cred.issuedDate
-                            ? new Date(Number(cred.issuedDate) * 1000).toLocaleDateString()
-                            : 'N/A',
                         studentName: attr('Student Name'),
                         rollNumber: attr('Roll Number'),
                         department: attr('Department'),
-                        year: attr('Academic Year'),
                         cgpa: attr('CGPA'),
+                        year: attr('Academic Year'),
                         degree: attr('Degree') || 'B.Tech',
-                        pdfUrl: metadata.credential_pdf
-                            ? resolveIPFSUrl(metadata.credential_pdf)
-                            : metadata.external_url
-                                ? resolveIPFSUrl(metadata.external_url)
-                                : null,
+                        issuedDate: cred.issuedDate
+                            ? new Date(Number(cred.issuedDate) * 1000).toLocaleDateString()
+                            : 'N/A',
+                        pdfUrl: metadata.credential_pdf ? resolveIPFSUrl(metadata.credential_pdf) : (metadata.external_url ? resolveIPFSUrl(metadata.external_url) : null),
                     };
                 })
             );
@@ -350,7 +348,7 @@ const CompanyDashboard = () => {
             {viewingPDF && (
                 <CredentialNFTModal
                     credential={viewingPDF}
-                    contractAddress={contractAddresses.localhost.AcademicCredentialSBT}
+                    contractAddress={contractAddresses[CONTRACT_NETWORK].AcademicCredentialSBT}
                     onClose={() => setViewingPDF(null)}
                 />
             )}
@@ -387,9 +385,14 @@ const WalletBanner = ({ isConnected, walletOk, wrongWallet, shortAccount, regist
                     ⚠️ {error}
                 </div>
             )}
-            {isConnected && chainId && chainId !== '31337' && chainId !== 31337 && (
+            {(() => {
+                const normalizedChainId = chainId != null ? chainId.toString() : null;
+                const expectedChainId = EXPECTED_CHAIN_ID.toString();
+                const isWrongNetwork = isConnected && normalizedChainId && normalizedChainId !== expectedChainId;
+                return isWrongNetwork;
+            })() && (
                 <div style={{ padding: '0.6rem 1rem', borderRadius: 'var(--radius)', marginBottom: '1rem', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', fontSize: '0.875rem' }}>
-                    ⚠️ Wrong network! Switch MetaMask to <strong>Hardhat Local (Chain 31337)</strong>.
+                    ⚠️ Wrong network! Switch MetaMask to <strong>{EXPECTED_CHAIN_ID === '11155111' ? 'Sepolia (Chain 11155111)' : 'Hardhat Local (Chain 31337)'}</strong>.
                 </div>
             )}
         </>

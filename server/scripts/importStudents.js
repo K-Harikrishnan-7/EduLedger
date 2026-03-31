@@ -88,6 +88,7 @@ async function importStudents() {
                 username: enrollment_no,
                 password_hash,
                 role: 'student',
+                name: name || null,
                 email: email || null,
                 wallet_address: wallet_address || null,
             },
@@ -98,7 +99,8 @@ async function importStudents() {
                 user_id: newUser.id,
                 enrollment_no,
                 university_id: university.id,
-                dob,
+                dob: dob || null,
+                wallet_address: wallet_address || null,
             },
         });
 

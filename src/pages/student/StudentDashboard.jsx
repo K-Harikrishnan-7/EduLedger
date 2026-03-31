@@ -10,7 +10,9 @@ import ConsentManagerArtifact from '../../contracts/artifacts/contracts/ConsentM
 import contractAddresses from '../../contracts/addresses.json';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-const HARDHAT_RPC = 'http://127.0.0.1:8545';
+const RPC_URL = import.meta.env.VITE_RPC_URL || 'http://127.0.0.1:8545';
+const EXPECTED_CHAIN_ID = import.meta.env.VITE_CHAIN_ID || '31337';
+const CONTRACT_NETWORK = EXPECTED_CHAIN_ID === '11155111' ? 'sepolia' : 'localhost';
 
 const StudentDashboard = () => {
     const { currentUser, authHeaders } = useBlockchain();
@@ -33,9 +35,9 @@ const StudentDashboard = () => {
         setLoadingCredentials(true);
         try {
             // Read-only provider — no MetaMask needed to read from chain
-            const provider = new JsonRpcProvider(HARDHAT_RPC);
+            const provider = new JsonRpcProvider(RPC_URL);
             const credContract = new Contract(
-                contractAddresses.localhost.AcademicCredentialSBT,
+                contractAddresses[CONTRACT_NETWORK].AcademicCredentialSBT,
                 AcademicCredentialSBTArtifact.abi,
                 provider
             );

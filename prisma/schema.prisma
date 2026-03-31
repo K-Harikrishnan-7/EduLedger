@@ -23,6 +23,7 @@ model User {
   student        Student?
   company        Company?
   reset_tokens   PasswordResetToken[]
+  otp_tokens     OtpToken[]
 
   @@map("users")
 }
@@ -120,4 +121,18 @@ model PasswordResetToken {
   user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
   @@map("password_reset_tokens")
+}
+
+model OtpToken {
+  id         String   @id @default(uuid())
+  user_id    String
+  otp        String
+  purpose    String   // "forgot_userid"
+  expires_at DateTime
+  used       Boolean  @default(false)
+  created_at DateTime @default(now())
+
+  user       User     @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@map("otp_tokens")
 }

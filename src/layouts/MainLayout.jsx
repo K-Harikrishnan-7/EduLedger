@@ -13,7 +13,7 @@ const MainLayout = () => {
         navigate('/');
     };
 
-    const isLanding = location.pathname === '/';
+    const isAuthOrLanding = ['/', '/login', '/forgot-password', '/reset-password', '/forgot-userid'].includes(location.pathname);
 
     return (
         <div className="layout-container" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -35,7 +35,7 @@ const MainLayout = () => {
                     <h1 style={{ fontSize: '1.25rem', fontWeight: 'bold' }}>EduLedger</h1>
                 </div>
 
-                {currentUser && !isLanding && (
+                {currentUser && !isAuthOrLanding && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                         <div style={{ textAlign: 'right' }}>
                             <div style={{ fontWeight: '500' }}>{currentUser.name}</div>

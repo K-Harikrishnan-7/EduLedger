@@ -7,6 +7,7 @@ import Home from './pages/Home';
 import Login from './pages/Login';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import ForgotUserId from './pages/ForgotUserId';
 
 import UniversityDashboard from './pages/university/UniversityDashboard';
 import StudentDashboard from './pages/student/StudentDashboard';
@@ -27,6 +28,7 @@ const AppRoutes = () => (
       <Route path="login" element={<Login />} />
       <Route path="forgot-password" element={<ForgotPassword />} />
       <Route path="reset-password" element={<ResetPassword />} />
+      <Route path="forgot-userid" element={<ForgotUserId />} />
 
       <Route path="student/*" element={
         <ProtectedRoute allowedRole="student">

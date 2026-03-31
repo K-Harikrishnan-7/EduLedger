@@ -1,4 +1,10 @@
 require("@nomicfoundation/hardhat-toolbox");
+require("dotenv").config();
+
+const SEPOLIA_RPC_URL = process.env.SEPOLIA_RPC_URL || "";
+// Only use the key if it looks like a real 32-byte hex private key (64 hex chars)
+const rawKey = process.env.PRIVATE_KEY || "";
+const PRIVATE_KEY = rawKey.length === 64 ? [rawKey] : [];
 
 module.exports = {
     solidity: {
@@ -19,8 +25,9 @@ module.exports = {
             chainId: 31337
         },
         sepolia: {
-            url: process.env.SEPOLIA_RPC_URL || "",
-            accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []
+            url: SEPOLIA_RPC_URL,
+            accounts: PRIVATE_KEY,
+            chainId: 11155111
         }
     },
     paths: {

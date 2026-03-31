@@ -11,7 +11,7 @@
     "server": "node server/index.js",
     "seed": "node server/prisma/seed.js",
     "import-students": "node server/scripts/importStudents.js",
-    "chain": "node scripts/start-chain.cjs"
+    "add-student": "node scripts/add-student.mjs"
   },
   "dependencies": {
     "@openzeppelin/contracts": "^5.4.0",

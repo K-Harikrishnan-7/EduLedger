@@ -25,11 +25,7 @@ dist-ssr
 
 /src/generated/prisma
 
-# Environment variables
+# Environment variables — never commit secrets!
 .env
 .env.*
-
-# Hardhat
-cache/
-artifacts/
-.hardhat-state.json
+!.env.example

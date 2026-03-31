@@ -100,6 +100,11 @@ const Login = () => {
                                 }}
                             />
                         </div>
+                        <div style={{ textAlign: 'right', marginTop: '0.4rem' }}>
+                            <Link to="/forgot-userid" style={{ fontSize: '0.8rem', color: 'var(--primary-color)', textDecoration: 'none' }}>
+                                Forgot User ID?
+                            </Link>
+                        </div>
                     </div>
 
                     {/* Password */}

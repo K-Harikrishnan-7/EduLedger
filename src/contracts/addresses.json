@@ -4,11 +4,12 @@
     "AcademicCredentialSBT": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
     "ConsentManager": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
     "testUniversityWallet": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-    "deployedAt": "2026-03-06T04:46:16.996Z"
+    "deployedAt": "2026-03-06T12:04:57.006Z"
   },
   "sepolia": {
-    "UniversityRegistry": "",
-    "AcademicCredentialSBT": "",
-    "ConsentManager": ""
+    "UniversityRegistry": "0x15fb724A152D1f3b81993204902d2a05F21E476D",
+    "AcademicCredentialSBT": "0x3E0aeB28b32F78714dB22a84E34162146BbdB583",
+    "ConsentManager": "0x39E0281225Dc2B52dcC5Ba066FF9B070b31a7a7E",
+    "deployedAt": "2026-03-06T14:27:25.331Z"
   }
 }
